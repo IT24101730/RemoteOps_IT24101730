@@ -16,7 +16,7 @@ Date: 01/10/2026
 Tool: ChatGPT
 
 Prompt:
-"Continue the assignment and calculate my personalised values using registration number IT24101730."
+"Continue the next steps and calculate my personalised values using registration number IT24101730."
 
 How I used it:
 I used ChatGPT to calculate the personalised values needed for my program. I then used these values when creating my project.
@@ -86,3 +86,16 @@ I created a Makefile that compiles both programs with gcc using -Wall, -Wextra, 
 
 Changes / evaluation:
 I ran make and both executables myself and confirmed the expected output before committing the Makefile.
+
+## Entry 7 — Basic TCP Agent
+Date: 05/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Continue the next Steps and help me build the basic TCP Agent on my personalised port 9410."
+
+How I used the output:
+I used the guidance to replace the Agent placeholder with a basic TCP server using socket(), bind(), listen(), and accept().
+
+Changes / evaluation:
+I compiled the code using my personalised Makefile, ran the Agent, verified that it listened on port 9410 using ss, and tested a basic TCP connection before committing the code.
