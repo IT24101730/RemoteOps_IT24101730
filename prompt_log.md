@@ -99,3 +99,18 @@ I used the guidance to replace the Agent placeholder with a basic TCP server usi
 
 Changes / evaluation:
 I compiled the code using my personalised Makefile, ran the Agent, verified that it listened on port 9410 using ss, and tested a basic TCP connection before committing the code.
+
+## Entry 8 — TCP Controller Connection
+Date: 05/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Continue Step 8 and help me build controller_730.c as the TCP client."
+
+How I used the output:
+I used the guidance to create the Controller TCP client using socket(), inet_pton(), and connect(). The Controller was configured to connect to the Agent at 127.0.0.1 on my personalised TCP port 9410.
+
+Changes / evaluation:
+I compiled the Agent and Controller using Makefile_730 and tested them in two terminals. 
+I confirmed that the Controller displayed a successful connection message and that the Agent displayed the Controller IP address. 
+I also checked the Git status and confirmed that the Controller connection code was committed and pushed successfully.
