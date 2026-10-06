@@ -130,3 +130,16 @@ I tested two commands sent in one TCP stream and confirmed that the Agent separa
 
 What I learned:
 TCP is a byte stream, so one recv() call may return part of a command or multiple commands. The application must perform its own message framing using a delimiter such as '\n'.
+
+## Entry 10 — Authentication
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement AUTH OPS-1730 with SID:0371."
+
+How I used the output:
+I used the guidance to add authentication to the Agent and include SID:0371 in the responses.
+
+Changes / evaluation:
+I tested successful AUTH, failed AUTH, and SYSINFO before authentication.
