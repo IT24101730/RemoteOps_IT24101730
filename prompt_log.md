@@ -114,3 +114,19 @@ Changes / evaluation:
 I compiled the Agent and Controller using Makefile_730 and tested them in two terminals. 
 I confirmed that the Controller displayed a successful connection message and that the Agent displayed the Controller IP address. 
 I also checked the Git status and confirmed that the Controller connection code was committed and pushed successfully.
+
+## Entry 9 — Reliable TCP Line Framing
+Date: 06/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Continue Step 9 and help me implement reliable TCP line framing."
+
+How I used the output:
+I used the guidance to implement a buffered recv_line() function in agent_730.c. The function reads newline-terminated TCP commands without assuming that one recv() call contains exactly one full command.
+
+Changes / evaluation:
+I tested two commands sent in one TCP stream and confirmed that the Agent separated them correctly. I also tested a command sent in separate pieces and confirmed that the Agent waited until the newline arrived before returning the complete command.
+
+What I learned:
+TCP is a byte stream, so one recv() call may return part of a command or multiple commands. The application must perform its own message framing using a delimiter such as '\n'.
