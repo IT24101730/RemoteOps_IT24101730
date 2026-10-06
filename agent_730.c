@@ -11,6 +11,10 @@
 #define RECEIVE_BUFFER_SIZE 4096
 #define LINE_SIZE 2048
 
+#define AUTH_TOKEN "OPS-1730"
+#define SESSION_ID "0371"
+
+
 /*
  * Keeps TCP data that has been received but
  * has not yet been returned as a complete line.
@@ -32,6 +36,45 @@ typedef struct
  * -2  = line is too long
  * -3  = client disconnected with an incomplete line
  */
+
+
+/*
+ * send_all()
+ *
+ * Sends all bytes in a buffer.
+ * send() is not guaranteed to send everything in one call.
+ */
+int send_all(int socket_fd, const char *buffer, size_t length)
+{
+    size_t total_sent = 0;
+
+    while (total_sent < length)
+    {
+        ssize_t bytes_sent = send(
+            socket_fd,
+            buffer + total_sent,
+            length - total_sent,
+            0);
+
+        if (bytes_sent > 0)
+        {
+            total_sent += (size_t)bytes_sent;
+            continue;
+        }
+
+        if (bytes_sent < 0 && errno == EINTR)
+        {
+            continue;
+        }
+
+        return -1;
+    }
+
+    return 0;
+}
+
+
+
 int recv_line(int socket_fd,
               LineReader *reader,
               char *line,
@@ -147,6 +190,7 @@ int main(void)
     LineReader reader = { .used = 0 };
 
     char line[LINE_SIZE];
+    int authenticated = 0;
 
     /* Create TCP socket */
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -215,31 +259,112 @@ int main(void)
             sizeof(line));
 
         if (result == 1)
+{
+    printf("Received line: [%s]\n", line);
+
+    /*
+     * Handle AUTH command.
+     */
+    if (strncmp(line, "AUTH ", 5) == 0)
+    {
+        const char *token = line + 5;
+
+        if (strcmp(token, AUTH_TOKEN) == 0)
         {
-            printf("Received line: [%s]\n", line);
-        }
-        else if (result == 0)
-        {
-            printf("Controller disconnected\n");
-            break;
-        }
-        else if (result == -2)
-        {
-            printf("Received line is too long\n");
-            break;
-        }
-        else if (result == -3)
-        {
-            printf("Controller disconnected with incomplete line\n");
-            break;
+            const char *response =
+                "OK AUTHENTICATED SID:" SESSION_ID "\n";
+
+            if (send_all(client_socket,
+                         response,
+                         strlen(response)) < 0)
+            {
+                perror("send");
+                break;
+            }
+
+            authenticated = 1;
+
+            printf("Controller authenticated successfully\n");
         }
         else
         {
-            perror("recv");
+            const char *response =
+                "ERR 001 AUTH_FAILED SID:" SESSION_ID "\n";
+
+            if (send_all(client_socket,
+                         response,
+                         strlen(response)) < 0)
+            {
+                perror("send");
+                break;
+            }
+
+            printf("Controller authentication failed\n");
+        }
+
+        continue;
+    }
+
+    /*
+     * Reject every non-AUTH command until
+     * authentication has succeeded.
+     */
+    if (!authenticated)
+    {
+        const char *response =
+            "ERR 003 AUTH_REQUIRED SID:" SESSION_ID "\n";
+
+        if (send_all(client_socket,
+                     response,
+                     strlen(response)) < 0)
+        {
+            perror("send");
+            break;
+        }
+
+        continue;
+    }
+
+        /*
+     * Other authenticated commands will be
+     * implemented in later steps.
+     */
+    {
+        const char *response =
+            "ERR 006 UNKNOWN_COMMAND SID:" SESSION_ID "\n";
+
+        if (send_all(client_socket,
+                     response,
+                     strlen(response)) < 0)
+        {
+            perror("send");
             break;
         }
     }
+}
+else if (result == 0)
+{
+    printf("Controller disconnected\n");
+    break;
+}
+else if (result == -2)
+{
+    printf("Received line is too long\n");
+    break;
+}
+else if (result == -3)
+{
+    printf("Controller disconnected with incomplete line\n");
+    break;
+}
+else
+{
+    perror("recv");
+    break;
+}
+    }
 
+    /* Close sockets */
     close(client_socket);
     close(server_socket);
 
