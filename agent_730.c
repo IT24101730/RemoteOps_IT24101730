@@ -10,12 +10,14 @@
 #define AGENT_PORT 9410
 #define AUTH_TOKEN "OPS-1730"
 #define SESSION_ID "0371"
+#define STORAGE_PATH "./agentfiles/IT24101730/"
 
 /* Server settings */
 #define BACKLOG 5
 #define RECEIVE_BUFFER_SIZE 4096
 #define LINE_SIZE 2048
 #define RESPONSE_SIZE 8192
+#define MAX_FILE_SIZE (10 * 1024 * 1024)
 
 typedef struct
 {
@@ -381,13 +383,7 @@ int get_process_list(char *message,
 /*
  * execute_whitelisted_command()
  *
- * Runs only the five commands allowed
- * by the assignment.
- *
- * Return:
- *  0 = success
- *  1 = command not allowed
- * -1 = execution error
+ * Runs only allowed EXEC commands.
  */
 int execute_whitelisted_command(const char *name,
                                 char *message,
@@ -448,10 +444,6 @@ int execute_whitelisted_command(const char *name,
 
     pclose(pipe);
 
-    /*
-     * The protocol requires one response line.
-     * Replace command output newlines with spaces.
-     */
     for (size_t i = 0;
          output[i] != '\0';
          i++)
@@ -479,6 +471,114 @@ int execute_whitelisted_command(const char *name,
 }
 
 
+/*
+ * receive_file_bytes()
+ *
+ * Receives exactly file_size raw bytes.
+ */
+int receive_file_bytes(int socket_fd,
+                       LineReader *reader,
+                       FILE *file,
+                       long long file_size)
+{
+    long long total_received = 0;
+
+    /*
+     * First consume any bytes already stored
+     * in the LineReader buffer.
+     */
+    if (reader->used > 0 &&
+        file_size > 0)
+    {
+        size_t bytes_to_use =
+            reader->used;
+
+        if ((long long)bytes_to_use >
+            file_size)
+        {
+            bytes_to_use =
+                (size_t)file_size;
+        }
+
+        if (fwrite(reader->data,
+                   1,
+                   bytes_to_use,
+                   file) != bytes_to_use)
+        {
+            return -1;
+        }
+
+        total_received +=
+            (long long)bytes_to_use;
+
+        memmove(reader->data,
+                reader->data + bytes_to_use,
+                reader->used - bytes_to_use);
+
+        reader->used -=
+            bytes_to_use;
+    }
+
+    /*
+     * Receive remaining bytes.
+     */
+    while (total_received < file_size)
+    {
+        char buffer[4096];
+
+        long long remaining =
+            file_size - total_received;
+
+        size_t wanted =
+            sizeof(buffer);
+
+        if (remaining <
+            (long long)wanted)
+        {
+            wanted =
+                (size_t)remaining;
+        }
+
+        ssize_t bytes_received =
+            recv(socket_fd,
+                 buffer,
+                 wanted,
+                 0);
+
+        if (bytes_received > 0)
+        {
+            if (fwrite(buffer,
+                       1,
+                       (size_t)bytes_received,
+                       file) !=
+                (size_t)bytes_received)
+            {
+                return -1;
+            }
+
+            total_received +=
+                bytes_received;
+
+            continue;
+        }
+
+        if (bytes_received == 0)
+        {
+            return -1;
+        }
+
+        if (errno == EINTR)
+        {
+            continue;
+        }
+
+        return -1;
+    }
+
+    return 0;
+}
+
+
 int main(void)
 {
     int server_socket;
@@ -496,9 +596,6 @@ int main(void)
     int authenticated = 0;
 
 
-    /*
-     * Create TCP socket.
-     */
     server_socket =
         socket(AF_INET,
                SOCK_STREAM,
@@ -511,9 +608,6 @@ int main(void)
     }
 
 
-    /*
-     * Prepare Agent address.
-     */
     memset(&server_address,
            0,
            sizeof(server_address));
@@ -528,31 +622,21 @@ int main(void)
         htons(AGENT_PORT);
 
 
-    /*
-     * Bind to personalised port 9410.
-     */
     if (bind(server_socket,
              (struct sockaddr *)&server_address,
              sizeof(server_address)) < 0)
     {
         perror("bind");
-
         close(server_socket);
-
         return 1;
     }
 
 
-    /*
-     * Start listening.
-     */
     if (listen(server_socket,
                BACKLOG) < 0)
     {
         perror("listen");
-
         close(server_socket);
-
         return 1;
     }
 
@@ -561,9 +645,6 @@ int main(void)
            AGENT_PORT);
 
 
-    /*
-     * Accept one Controller for now.
-     */
     client_address_length =
         sizeof(client_address);
 
@@ -575,9 +656,7 @@ int main(void)
     if (client_socket < 0)
     {
         perror("accept");
-
         close(server_socket);
-
         return 1;
     }
 
@@ -586,9 +665,6 @@ int main(void)
            inet_ntoa(client_address.sin_addr));
 
 
-    /*
-     * Process commands.
-     */
     while (1)
     {
         int result =
@@ -649,8 +725,7 @@ int main(void)
 
 
             /*
-             * Reject every other command
-             * before authentication.
+             * Require authentication.
              */
             if (!authenticated)
             {
@@ -669,7 +744,8 @@ int main(void)
             /*
              * SYSINFO
              */
-            if (strcmp(line, "SYSINFO") == 0)
+            if (strcmp(line,
+                       "SYSINFO") == 0)
             {
                 char sysinfo_message[RESPONSE_SIZE];
 
@@ -703,7 +779,8 @@ int main(void)
             /*
              * LISTPROC
              */
-            if (strcmp(line, "LISTPROC") == 0)
+            if (strcmp(line,
+                       "LISTPROC") == 0)
             {
                 char process_message[RESPONSE_SIZE];
 
@@ -752,7 +829,6 @@ int main(void)
                         exec_message,
                         sizeof(exec_message));
 
-
                 if (exec_result == 1)
                 {
                     if (send_response(
@@ -789,6 +865,169 @@ int main(void)
 
 
             /*
+             * PUT
+             */
+            if (strncmp(line,
+                        "PUT ",
+                        4) == 0)
+            {
+                char filename[256];
+                long long file_size;
+
+                if (sscanf(line,
+                           "PUT %255s %lld",
+                           filename,
+                           &file_size) != 2)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 010 INVALID_PUT") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                /*
+                 * Prevent directory traversal.
+                 */
+                if (strchr(filename,
+                           '/') != NULL ||
+                    strstr(filename,
+                           "..") != NULL)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 011 INVALID_FILENAME") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                /*
+                 * Validate size.
+                 */
+                if (file_size < 0 ||
+                    file_size > MAX_FILE_SIZE)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 004 FILE_TOO_LARGE") < 0)
+                    {
+                        perror("send");
+                    }
+
+                    break;
+                }
+
+
+                char file_path[512];
+
+                int path_length =
+                    snprintf(file_path,
+                             sizeof(file_path),
+                             "%s%s",
+                             STORAGE_PATH,
+                             filename);
+
+                if (path_length < 0 ||
+                    (size_t)path_length >=
+                        sizeof(file_path))
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 011 INVALID_FILENAME") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                FILE *upload_file =
+                    fopen(file_path,
+                          "wb");
+
+                if (upload_file == NULL)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 012 FILE_WRITE_FAILED") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                if (receive_file_bytes(
+                        client_socket,
+                        &reader,
+                        upload_file,
+                        file_size) < 0)
+                {
+                    fclose(upload_file);
+
+                    remove(file_path);
+
+                    printf(
+                        "File upload failed: %s\n",
+                        filename);
+
+                    break;
+                }
+
+
+                fclose(upload_file);
+
+
+                char put_response[512];
+
+                int response_length =
+                    snprintf(
+                        put_response,
+                        sizeof(put_response),
+                        "OK FILE_RECEIVED %s",
+                        filename);
+
+                if (response_length < 0 ||
+                    (size_t)response_length >=
+                        sizeof(put_response))
+                {
+                    break;
+                }
+
+
+                if (send_response(
+                        client_socket,
+                        put_response) < 0)
+                {
+                    perror("send");
+                    break;
+                }
+
+
+                printf(
+                    "File received: %s (%lld bytes)\n",
+                    filename,
+                    file_size);
+
+                continue;
+            }
+
+
+            /*
              * Unknown authenticated command.
              */
             if (send_response(
@@ -819,7 +1058,6 @@ int main(void)
         {
             printf(
                 "Controller disconnected with incomplete line\n");
-
             break;
         }
 
