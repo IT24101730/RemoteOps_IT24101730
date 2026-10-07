@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <signal.h>
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -42,16 +43,12 @@ typedef struct
 
 /*
  * Protect log writes.
- * This will also help when concurrency is added later.
  */
 pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 /*
- * log_event()
- *
- * Write one timestamped event to the
- * personalised log file.
+ * Write one timestamped event to the log file.
  */
 void log_event(const char *event)
 {
@@ -88,9 +85,7 @@ void log_event(const char *event)
 
 
 /*
- * log_command()
- *
- * Logs commands without recording
+ * Log a command without storing
  * the authentication token.
  */
 void log_command(const char *command)
@@ -116,8 +111,6 @@ void log_command(const char *command)
 
 
 /*
- * recv_line()
- *
  * Read one newline-terminated TCP line.
  */
 int recv_line(int socket_fd,
@@ -200,8 +193,6 @@ int recv_line(int socket_fd,
 
 
 /*
- * send_all()
- *
  * Send all bytes in a buffer.
  */
 int send_all(int socket_fd,
@@ -238,9 +229,7 @@ int send_all(int socket_fd,
 
 
 /*
- * send_response()
- *
- * Add SID and newline automatically.
+ * Send response with SID and newline.
  */
 int send_response(int socket_fd,
                   const char *message)
@@ -267,7 +256,7 @@ int send_response(int socket_fd,
 
 
 /*
- * get_sysinfo()
+ * Get CPU load, memory usage and uptime.
  */
 int get_sysinfo(char *message,
                 size_t message_size)
@@ -375,7 +364,7 @@ int get_sysinfo(char *message,
 
 
 /*
- * get_process_list()
+ * Get running process list.
  */
 int get_process_list(char *message,
                      size_t message_size)
@@ -554,7 +543,7 @@ int execute_whitelisted_command(const char *name,
 
 
 /*
- * Receive exactly file_size bytes for PUT.
+ * Receive exactly file_size bytes.
  */
 int receive_file_bytes(int socket_fd,
                        LineReader *reader,
@@ -653,7 +642,7 @@ int receive_file_bytes(int socket_fd,
 
 
 /*
- * Send exactly file_size bytes for GET.
+ * Send exactly file_size bytes.
  */
 int send_file_bytes(int socket_fd,
                     FILE *file,
@@ -800,6 +789,12 @@ void *monitor_thread(void *arg)
 
 int main(void)
 {
+    /*
+     * Prevent Agent termination when sending
+     * to a disconnected Controller.
+     */
+    signal(SIGPIPE, SIG_IGN);
+
     int server_socket;
     int client_socket;
 
@@ -823,6 +818,25 @@ int main(void)
     if (server_socket < 0)
     {
         perror("socket");
+        return 1;
+    }
+
+
+    /*
+     * Allow quick restart on the same port.
+     */
+    int reuse_address = 1;
+
+    if (setsockopt(server_socket,
+                   SOL_SOCKET,
+                   SO_REUSEADDR,
+                   &reuse_address,
+                   sizeof(reuse_address)) < 0)
+    {
+        perror("setsockopt");
+
+        close(server_socket);
+
         return 1;
     }
 
@@ -887,9 +901,6 @@ int main(void)
         inet_ntoa(client_address.sin_addr));
 
 
-    /*
-     * Log Controller connection.
-     */
     {
         char log_message[256];
 
@@ -940,10 +951,6 @@ int main(void)
                 "Received line: [%s]\n",
                 line);
 
-
-            /*
-             * Log command.
-             */
             log_command(line);
 
 
@@ -995,7 +1002,7 @@ int main(void)
             }
 
 
-            /* Require AUTH first */
+            /* AUTH required before other commands */
             if (!authenticated)
             {
                 if (send_response(
@@ -1011,9 +1018,7 @@ int main(void)
 
 
             /* SYSINFO */
-            if (strcmp(
-                    line,
-                    "SYSINFO") == 0)
+            if (strcmp(line, "SYSINFO") == 0)
             {
                 char message[RESPONSE_SIZE];
 
@@ -1045,9 +1050,7 @@ int main(void)
 
 
             /* LISTPROC */
-            if (strcmp(
-                    line,
-                    "LISTPROC") == 0)
+            if (strcmp(line, "LISTPROC") == 0)
             {
                 char message[RESPONSE_SIZE];
 
@@ -1079,10 +1082,7 @@ int main(void)
 
 
             /* EXEC */
-            if (strncmp(
-                    line,
-                    "EXEC ",
-                    5) == 0)
+            if (strncmp(line, "EXEC ", 5) == 0)
             {
                 const char *command_name =
                     line + 5;
@@ -1131,10 +1131,7 @@ int main(void)
 
 
             /* PUT */
-            if (strncmp(
-                    line,
-                    "PUT ",
-                    4) == 0)
+            if (strncmp(line, "PUT ", 4) == 0)
             {
                 char filename[256];
                 long long file_size;
@@ -1157,12 +1154,8 @@ int main(void)
                 }
 
 
-                if (strchr(
-                        filename,
-                        '/') != NULL ||
-                    strstr(
-                        filename,
-                        "..") != NULL)
+                if (strchr(filename, '/') != NULL ||
+                    strstr(filename, "..") != NULL)
                 {
                     if (send_response(
                             client_socket,
@@ -1177,8 +1170,7 @@ int main(void)
 
 
                 if (file_size < 0 ||
-                    file_size >
-                        MAX_FILE_SIZE)
+                    file_size > MAX_FILE_SIZE)
                 {
                     if (send_response(
                             client_socket,
@@ -1193,34 +1185,15 @@ int main(void)
 
                 char file_path[512];
 
-                int path_length =
-                    snprintf(
-                        file_path,
-                        sizeof(file_path),
-                        "%s%s",
-                        STORAGE_PATH,
-                        filename);
-
-
-                if (path_length < 0 ||
-                    (size_t)path_length >=
-                        sizeof(file_path))
-                {
-                    if (send_response(
-                            client_socket,
-                            "ERR 011 INVALID_FILENAME") < 0)
-                    {
-                        perror("send");
-                        break;
-                    }
-
-                    continue;
-                }
+                snprintf(file_path,
+                         sizeof(file_path),
+                         "%s%s",
+                         STORAGE_PATH,
+                         filename);
 
 
                 FILE *upload_file =
-                    fopen(file_path,
-                          "wb");
+                    fopen(file_path, "wb");
 
 
                 if (upload_file == NULL)
@@ -1244,7 +1217,6 @@ int main(void)
                         file_size) < 0)
                 {
                     fclose(upload_file);
-
                     remove(file_path);
 
                     printf(
@@ -1301,10 +1273,7 @@ int main(void)
 
 
             /* GET */
-            if (strncmp(
-                    line,
-                    "GET ",
-                    4) == 0)
+            if (strncmp(line, "GET ", 4) == 0)
             {
                 char filename[256];
 
@@ -1325,12 +1294,8 @@ int main(void)
                 }
 
 
-                if (strchr(
-                        filename,
-                        '/') != NULL ||
-                    strstr(
-                        filename,
-                        "..") != NULL)
+                if (strchr(filename, '/') != NULL ||
+                    strstr(filename, "..") != NULL)
                 {
                     if (send_response(
                             client_socket,
@@ -1346,17 +1311,15 @@ int main(void)
 
                 char file_path[512];
 
-                snprintf(
-                    file_path,
-                    sizeof(file_path),
-                    "%s%s",
-                    STORAGE_PATH,
-                    filename);
+                snprintf(file_path,
+                         sizeof(file_path),
+                         "%s%s",
+                         STORAGE_PATH,
+                         filename);
 
 
                 FILE *download_file =
-                    fopen(file_path,
-                          "rb");
+                    fopen(file_path, "rb");
 
 
                 if (download_file == NULL)
@@ -1373,13 +1336,42 @@ int main(void)
                 }
 
 
-                fseek(
-                    download_file,
-                    0,
-                    SEEK_END);
+                if (fseek(
+                        download_file,
+                        0,
+                        SEEK_END) != 0)
+                {
+                    fclose(download_file);
+
+                    if (send_response(
+                            client_socket,
+                            "ERR 015 FILE_READ_FAILED") < 0)
+                    {
+                        perror("send");
+                    }
+
+                    continue;
+                }
+
 
                 long file_size =
                     ftell(download_file);
+
+
+                if (file_size < 0)
+                {
+                    fclose(download_file);
+
+                    if (send_response(
+                            client_socket,
+                            "ERR 015 FILE_READ_FAILED") < 0)
+                    {
+                        perror("send");
+                    }
+
+                    continue;
+                }
+
 
                 rewind(download_file);
 
@@ -1394,6 +1386,15 @@ int main(void)
                         filename,
                         file_size,
                         SESSION_ID);
+
+
+                if (response_length < 0 ||
+                    (size_t)response_length >=
+                        sizeof(response))
+                {
+                    fclose(download_file);
+                    break;
+                }
 
 
                 if (send_all(
@@ -1668,7 +1669,8 @@ int main(void)
 
 
     /*
-     * Safety cleanup.
+     * Stop monitoring if Controller disconnects
+     * without MONITOR STOP or QUIT.
      */
     if (monitor.active)
     {
