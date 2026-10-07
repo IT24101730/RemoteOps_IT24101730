@@ -260,3 +260,16 @@ I added logic to stop active UDP monitoring, send OK BYE, and close the TCP sess
 
 Evaluation:
 I tested QUIT normally and while UDP monitoring was active.
+
+## Entry 20 — Logging
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me add logging to remoteops_IT24101730.log."
+
+How I used it:
+I added timestamped logging for connections, commands and file transfers.
+
+Evaluation:
+I tested several commands and checked the generated personalised log file.
