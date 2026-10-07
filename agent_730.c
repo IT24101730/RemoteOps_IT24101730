@@ -157,8 +157,8 @@ int send_all(int socket_fd,
 
 
 /*
- * Send RemoteOps response.
- * SID and newline are added automatically.
+ * Send one RemoteOps response.
+ * Adds SID and newline automatically.
  */
 int send_response(int socket_fd,
                   const char *message)
@@ -185,7 +185,7 @@ int send_response(int socket_fd,
 
 
 /*
- * Read CPU load, memory usage and uptime.
+ * Read CPU load, used memory and uptime.
  */
 int get_sysinfo(char *message,
                 size_t message_size)
@@ -203,7 +203,6 @@ int get_sysinfo(char *message,
     long value;
     char unit[32];
 
-
     file = fopen("/proc/loadavg", "r");
 
     if (file == NULL)
@@ -218,7 +217,6 @@ int get_sysinfo(char *message,
     }
 
     fclose(file);
-
 
     file = fopen("/proc/meminfo", "r");
 
@@ -261,7 +259,6 @@ int get_sysinfo(char *message,
         (mem_total_kb -
          mem_available_kb) / 1024;
 
-
     file = fopen("/proc/uptime", "r");
 
     if (file == NULL)
@@ -276,7 +273,6 @@ int get_sysinfo(char *message,
     }
 
     fclose(file);
-
 
     int length =
         snprintf(message,
@@ -397,10 +393,8 @@ int execute_whitelisted_command(const char *name,
     const char *shell_command = NULL;
 
     FILE *pipe;
-
     char output[512];
     size_t used = 0;
-
 
     if (strcmp(name, "DATE") == 0)
     {
@@ -427,14 +421,12 @@ int execute_whitelisted_command(const char *name,
         return 1;
     }
 
-
     pipe = popen(shell_command, "r");
 
     if (pipe == NULL)
     {
         return -1;
     }
-
 
     output[0] = '\0';
 
@@ -452,10 +444,6 @@ int execute_whitelisted_command(const char *name,
 
     pclose(pipe);
 
-
-    /*
-     * Keep protocol response on one line.
-     */
     for (size_t i = 0;
          output[i] != '\0';
          i++)
@@ -466,7 +454,6 @@ int execute_whitelisted_command(const char *name,
             output[i] = ' ';
         }
     }
-
 
     int length =
         snprintf(message,
@@ -494,10 +481,6 @@ int receive_file_bytes(int socket_fd,
 {
     long long total_received = 0;
 
-
-    /*
-     * Use bytes already stored by recv_line().
-     */
     if (reader->used > 0 &&
         file_size > 0)
     {
@@ -511,7 +494,6 @@ int receive_file_bytes(int socket_fd,
                 (size_t)file_size;
         }
 
-
         if (fwrite(reader->data,
                    1,
                    bytes_to_use,
@@ -520,10 +502,8 @@ int receive_file_bytes(int socket_fd,
             return -1;
         }
 
-
         total_received +=
             (long long)bytes_to_use;
-
 
         memmove(reader->data,
                 reader->data + bytes_to_use,
@@ -532,7 +512,6 @@ int receive_file_bytes(int socket_fd,
         reader->used -=
             bytes_to_use;
     }
-
 
     while (total_received < file_size)
     {
@@ -551,13 +530,11 @@ int receive_file_bytes(int socket_fd,
                 (size_t)remaining;
         }
 
-
         ssize_t bytes_received =
             recv(socket_fd,
                  buffer,
                  wanted,
                  0);
-
 
         if (bytes_received > 0)
         {
@@ -576,12 +553,10 @@ int receive_file_bytes(int socket_fd,
             continue;
         }
 
-
         if (bytes_received == 0)
         {
             return -1;
         }
-
 
         if (errno == EINTR)
         {
@@ -590,7 +565,6 @@ int receive_file_bytes(int socket_fd,
 
         return -1;
     }
-
 
     return 0;
 }
@@ -604,7 +578,6 @@ int send_file_bytes(int socket_fd,
                     long long file_size)
 {
     long long total_sent = 0;
-
 
     while (total_sent < file_size)
     {
@@ -623,7 +596,6 @@ int send_file_bytes(int socket_fd,
                 (size_t)remaining;
         }
 
-
         size_t bytes_read =
             fread(buffer,
                   1,
@@ -635,7 +607,6 @@ int send_file_bytes(int socket_fd,
             return -1;
         }
 
-
         if (send_all(socket_fd,
                      buffer,
                      bytes_read) < 0)
@@ -643,11 +614,9 @@ int send_file_bytes(int socket_fd,
             return -1;
         }
 
-
         total_sent +=
             (long long)bytes_read;
     }
-
 
     return 0;
 }
@@ -655,15 +624,11 @@ int send_file_bytes(int socket_fd,
 
 /*
  * UDP monitoring thread.
- *
- * Sends SYSINFO-style UDP datagrams
- * every 2 seconds.
  */
 void *monitor_thread(void *arg)
 {
     MonitorSession *monitor =
         (MonitorSession *)arg;
-
 
     int udp_socket =
         socket(AF_INET,
@@ -673,12 +638,9 @@ void *monitor_thread(void *arg)
     if (udp_socket < 0)
     {
         perror("UDP socket");
-
         monitor->active = 0;
-
         return NULL;
     }
-
 
     struct sockaddr_in destination;
 
@@ -692,7 +654,6 @@ void *monitor_thread(void *arg)
     destination.sin_port =
         htons(monitor->udp_port);
 
-
     if (inet_pton(AF_INET,
                   monitor->controller_ip,
                   &destination.sin_addr) <= 0)
@@ -700,33 +661,22 @@ void *monitor_thread(void *arg)
         perror("inet_pton");
 
         close(udp_socket);
-
         monitor->active = 0;
 
         return NULL;
     }
-
 
     while (monitor->active)
     {
         char sysinfo_message[RESPONSE_SIZE];
         char udp_message[RESPONSE_SIZE];
 
-
         if (get_sysinfo(
                 sysinfo_message,
                 sizeof(sysinfo_message)) == 0)
         {
-            /*
-             * get_sysinfo returns:
-             * OK SYSINFO ...
-             *
-             * UDP should contain:
-             * SYSINFO ... SID:0371
-             */
             const char *stats =
                 sysinfo_message;
-
 
             if (strncmp(stats,
                         "OK ",
@@ -735,7 +685,6 @@ void *monitor_thread(void *arg)
                 stats += 3;
             }
 
-
             int length =
                 snprintf(
                     udp_message,
@@ -743,7 +692,6 @@ void *monitor_thread(void *arg)
                     "%s SID:%s",
                     stats,
                     SESSION_ID);
-
 
             if (length > 0 &&
                 (size_t)length <
@@ -759,10 +707,8 @@ void *monitor_thread(void *arg)
             }
         }
 
-
         sleep(MONITOR_INTERVAL);
     }
-
 
     close(udp_socket);
 
@@ -787,9 +733,6 @@ int main(void)
     int authenticated = 0;
 
 
-    /*
-     * Create TCP socket.
-     */
     server_socket =
         socket(AF_INET,
                SOCK_STREAM,
@@ -816,31 +759,21 @@ int main(void)
         htons(AGENT_PORT);
 
 
-    /*
-     * Bind to personalised port.
-     */
     if (bind(server_socket,
              (struct sockaddr *)&server_address,
              sizeof(server_address)) < 0)
     {
         perror("bind");
-
         close(server_socket);
-
         return 1;
     }
 
 
-    /*
-     * Listen for connections.
-     */
     if (listen(server_socket,
                BACKLOG) < 0)
     {
         perror("listen");
-
         close(server_socket);
-
         return 1;
     }
 
@@ -850,10 +783,6 @@ int main(void)
         AGENT_PORT);
 
 
-    /*
-     * Accept one Controller for now.
-     * Concurrency is added later.
-     */
     client_address_length =
         sizeof(client_address);
 
@@ -863,13 +792,10 @@ int main(void)
             (struct sockaddr *)&client_address,
             &client_address_length);
 
-
     if (client_socket < 0)
     {
         perror("accept");
-
         close(server_socket);
-
         return 1;
     }
 
@@ -879,9 +805,6 @@ int main(void)
         inet_ntoa(client_address.sin_addr));
 
 
-    /*
-     * Monitoring state for this session.
-     */
     MonitorSession monitor;
 
     memset(&monitor,
@@ -904,9 +827,6 @@ int main(void)
     }
 
 
-    /*
-     * Process commands.
-     */
     while (1)
     {
         int result =
@@ -924,9 +844,7 @@ int main(void)
                 line);
 
 
-            /*
-             * AUTH
-             */
+            /* AUTH */
             if (strncmp(
                     line,
                     "AUTH ",
@@ -934,7 +852,6 @@ int main(void)
             {
                 const char *token =
                     line + 5;
-
 
                 if (strcmp(
                         token,
@@ -967,14 +884,11 @@ int main(void)
                         "Controller authentication failed\n");
                 }
 
-
                 continue;
             }
 
 
-            /*
-             * All other commands require AUTH.
-             */
+            /* Require AUTH first */
             if (!authenticated)
             {
                 if (send_response(
@@ -989,15 +903,12 @@ int main(void)
             }
 
 
-            /*
-             * SYSINFO
-             */
+            /* SYSINFO */
             if (strcmp(
                     line,
                     "SYSINFO") == 0)
             {
                 char message[RESPONSE_SIZE];
-
 
                 if (get_sysinfo(
                         message,
@@ -1022,20 +933,16 @@ int main(void)
                     }
                 }
 
-
                 continue;
             }
 
 
-            /*
-             * LISTPROC
-             */
+            /* LISTPROC */
             if (strcmp(
                     line,
                     "LISTPROC") == 0)
             {
                 char message[RESPONSE_SIZE];
-
 
                 if (get_process_list(
                         message,
@@ -1060,14 +967,11 @@ int main(void)
                     }
                 }
 
-
                 continue;
             }
 
 
-            /*
-             * EXEC
-             */
+            /* EXEC */
             if (strncmp(
                     line,
                     "EXEC ",
@@ -1078,13 +982,11 @@ int main(void)
 
                 char message[RESPONSE_SIZE];
 
-
                 int exec_result =
                     execute_whitelisted_command(
                         command_name,
                         message,
                         sizeof(message));
-
 
                 if (exec_result == 1)
                 {
@@ -1117,14 +1019,11 @@ int main(void)
                     }
                 }
 
-
                 continue;
             }
 
 
-            /*
-             * PUT
-             */
+            /* PUT */
             if (strncmp(
                     line,
                     "PUT ",
@@ -1132,7 +1031,6 @@ int main(void)
             {
                 char filename[256];
                 long long file_size;
-
 
                 if (sscanf(
                         line,
@@ -1291,16 +1189,13 @@ int main(void)
             }
 
 
-            /*
-             * GET
-             */
+            /* GET */
             if (strncmp(
                     line,
                     "GET ",
                     4) == 0)
             {
                 char filename[256];
-
 
                 if (sscanf(
                         line,
@@ -1470,16 +1365,13 @@ int main(void)
             }
 
 
-            /*
-             * MONITOR START <udp_port>
-             */
+            /* MONITOR START */
             if (strncmp(
                     line,
                     "MONITOR START ",
                     14) == 0)
             {
                 int udp_port;
-
 
                 if (sscanf(
                         line,
@@ -1551,9 +1443,7 @@ int main(void)
             }
 
 
-            /*
-             * MONITOR STOP
-             */
+            /* MONITOR STOP */
             if (strcmp(
                     line,
                     "MONITOR STOP") == 0)
@@ -1563,11 +1453,9 @@ int main(void)
                     monitor.active =
                         0;
 
-
                     pthread_join(
                         monitor.thread,
                         NULL);
-
 
                     printf(
                         "UDP monitoring stopped\n");
@@ -1587,9 +1475,52 @@ int main(void)
             }
 
 
-            /*
-             * Unknown command.
-             */
+            /* QUIT */
+            if (strcmp(
+                    line,
+                    "QUIT") == 0)
+            {
+                /*
+                 * Stop active monitoring first.
+                 */
+                if (monitor.active)
+                {
+                    monitor.active =
+                        0;
+
+                    pthread_join(
+                        monitor.thread,
+                        NULL);
+
+                    printf(
+                        "UDP monitoring stopped\n");
+                }
+
+
+                /*
+                 * Send final response.
+                 */
+                if (send_response(
+                        client_socket,
+                        "OK BYE") < 0)
+                {
+                    perror("send");
+                }
+
+
+                printf(
+                    "Controller requested QUIT\n");
+
+
+                /*
+                 * Leave command loop.
+                 * Socket is closed below.
+                 */
+                break;
+            }
+
+
+            /* Unknown command */
             if (send_response(
                     client_socket,
                     "ERR 006 UNKNOWN_COMMAND") < 0)
@@ -1630,21 +1561,19 @@ int main(void)
         else
         {
             perror("recv");
-
             break;
         }
     }
 
 
     /*
-     * Stop monitoring if Controller
-     * disconnects without MONITOR STOP.
+     * Safety cleanup if Controller disconnects
+     * without MONITOR STOP or QUIT.
      */
     if (monitor.active)
     {
         monitor.active =
             0;
-
 
         pthread_join(
             monitor.thread,
