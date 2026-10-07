@@ -195,3 +195,16 @@ I added support for DATE, UPTIME, DISKFREE, HOSTNAME and WHOAMI only.
 
 Evaluation:
 I tested EXEC DATE successfully and confirmed EXEC LS was rejected.
+
+## Entry 15 — PUT Upload
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement PUT file upload."
+
+How I used it:
+I added exact byte-counted upload to ./agentfiles/IT24101730/.
+
+Evaluation:
+I uploaded a test file and verified the stored file was identical.
