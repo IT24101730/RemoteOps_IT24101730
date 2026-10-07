@@ -273,3 +273,16 @@ I added timestamped logging for connections, commands and file transfers.
 
 Evaluation:
 I tested several commands and checked the generated personalised log file.
+
+## Entry 21 — Disconnect and Error Handling
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement graceful disconnect and error handling."
+
+How I used it:
+I added SIGPIPE protection and SO_REUSEADDR, then tested an unexpected Controller disconnect.
+
+Evaluation:
+The Agent detected the disconnect and exited cleanly without crashing.
