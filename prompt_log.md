@@ -247,3 +247,16 @@ I added logic to stop and join the UDP monitoring thread.
 
 Evaluation:
 I confirmed UDP messages stopped after MONITOR STOP and the Agent returned OK MONITOR_STOPPED.
+
+## Entry 19 — QUIT
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement QUIT."
+
+How I used it:
+I added logic to stop active UDP monitoring, send OK BYE, and close the TCP session cleanly.
+
+Evaluation:
+I tested QUIT normally and while UDP monitoring was active.
