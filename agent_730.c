@@ -31,8 +31,7 @@ typedef struct
 /*
  * recv_line()
  *
- * Reads exactly one newline-terminated text line
- * from the TCP byte stream.
+ * Reads one newline-terminated line from TCP.
  *
  * Return values:
  *  1  = complete line received
@@ -50,10 +49,7 @@ int recv_line(int socket_fd,
     {
         size_t i;
 
-        /*
-         * Search already-received data
-         * for a newline.
-         */
+        /* Search existing buffered data for '\n' */
         for (i = 0; i < reader->used; i++)
         {
             if (reader->data[i] == '\n')
@@ -65,19 +61,13 @@ int recv_line(int socket_fd,
                     return -2;
                 }
 
-                /*
-                 * Copy one complete line.
-                 */
                 memcpy(line,
                        reader->data,
                        line_length);
 
                 line[line_length] = '\0';
 
-                /*
-                 * Remove optional '\r'
-                 * when input uses "\r\n".
-                 */
+                /* Remove optional '\r' */
                 if (line_length > 0 &&
                     line[line_length - 1] == '\r')
                 {
@@ -86,7 +76,6 @@ int recv_line(int socket_fd,
 
                 /*
                  * Preserve bytes after this newline.
-                 * They may contain another command.
                  */
                 memmove(reader->data,
                         reader->data + i + 1,
@@ -98,9 +87,6 @@ int recv_line(int socket_fd,
             }
         }
 
-        /*
-         * Buffer is full but no newline appeared.
-         */
         if (reader->used == sizeof(reader->data))
         {
             return -2;
@@ -121,10 +107,6 @@ int recv_line(int socket_fd,
             continue;
         }
 
-        /*
-         * recv() returning 0 means
-         * the Controller disconnected.
-         */
         if (bytes_received == 0)
         {
             if (reader->used == 0)
@@ -132,17 +114,9 @@ int recv_line(int socket_fd,
                 return 0;
             }
 
-            /*
-             * Connection closed while a partial
-             * line was still in the buffer.
-             */
             return -3;
         }
 
-        /*
-         * If recv() was interrupted,
-         * try again.
-         */
         if (errno == EINTR)
         {
             continue;
@@ -156,8 +130,8 @@ int recv_line(int socket_fd,
 /*
  * send_all()
  *
- * Ensures that all bytes are sent even if
- * send() writes only part of the buffer.
+ * Sends all bytes even if send()
+ * sends only part of the buffer.
  */
 int send_all(int socket_fd,
              const char *buffer,
@@ -179,7 +153,8 @@ int send_all(int socket_fd,
             continue;
         }
 
-        if (bytes_sent < 0 && errno == EINTR)
+        if (bytes_sent < 0 &&
+            errno == EINTR)
         {
             continue;
         }
@@ -194,9 +169,8 @@ int send_all(int socket_fd,
 /*
  * send_response()
  *
- * Sends one RemoteOps protocol response.
- * Automatically adds the personalised SID
- * and the required newline.
+ * Sends one RemoteOps response line.
+ * Adds SID:0371 and '\n' automatically.
  */
 int send_response(int socket_fd,
                   const char *message)
@@ -222,6 +196,145 @@ int send_response(int socket_fd,
 }
 
 
+/*
+ * get_sysinfo()
+ *
+ * Reads CPU load, used memory and uptime
+ * from Linux /proc files.
+ */
+int get_sysinfo(char *message,
+                size_t message_size)
+{
+    FILE *file;
+
+    double cpu_load;
+    double uptime;
+
+    long mem_total_kb = 0;
+    long mem_available_kb = 0;
+    long mem_used_mb;
+
+    char label[64];
+    long value;
+    char unit[32];
+
+
+    /*
+     * Read 1-minute load average.
+     */
+    file = fopen("/proc/loadavg", "r");
+
+    if (file == NULL)
+    {
+        return -1;
+    }
+
+    if (fscanf(file,
+               "%lf",
+               &cpu_load) != 1)
+    {
+        fclose(file);
+        return -1;
+    }
+
+    fclose(file);
+
+
+    /*
+     * Read memory information.
+     */
+    file = fopen("/proc/meminfo", "r");
+
+    if (file == NULL)
+    {
+        return -1;
+    }
+
+    while (fscanf(file,
+                  "%63s %ld %31s",
+                  label,
+                  &value,
+                  unit) == 3)
+    {
+        if (strcmp(label,
+                   "MemTotal:") == 0)
+        {
+            mem_total_kb = value;
+        }
+        else if (strcmp(label,
+                        "MemAvailable:") == 0)
+        {
+            mem_available_kb = value;
+        }
+
+        if (mem_total_kb > 0 &&
+            mem_available_kb > 0)
+        {
+            break;
+        }
+    }
+
+    fclose(file);
+
+    if (mem_total_kb <= 0 ||
+        mem_available_kb <= 0)
+    {
+        return -1;
+    }
+
+    /*
+     * Used memory = total - available.
+     * Convert KB to MB.
+     */
+    mem_used_mb =
+        (mem_total_kb -
+         mem_available_kb) / 1024;
+
+
+    /*
+     * Read uptime.
+     */
+    file = fopen("/proc/uptime", "r");
+
+    if (file == NULL)
+    {
+        return -1;
+    }
+
+    if (fscanf(file,
+               "%lf",
+               &uptime) != 1)
+    {
+        fclose(file);
+        return -1;
+    }
+
+    fclose(file);
+
+
+    /*
+     * Build SYSINFO message.
+     *
+     * send_response() will add SID:0371.
+     */
+    int length =
+        snprintf(message,
+                 message_size,
+                 "OK SYSINFO %.2f %ld %.0f",
+                 cpu_load,
+                 mem_used_mb,
+                 uptime);
+
+    if (length < 0 ||
+        (size_t)length >= message_size)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+
 int main(void)
 {
     int server_socket;
@@ -236,18 +349,16 @@ int main(void)
 
     char line[LINE_SIZE];
 
-    /*
-     * Each Controller session begins
-     * unauthenticated.
-     */
     int authenticated = 0;
 
 
     /*
-     * Create IPv4 TCP socket.
+     * Create TCP socket.
      */
     server_socket =
-        socket(AF_INET, SOCK_STREAM, 0);
+        socket(AF_INET,
+               SOCK_STREAM,
+               0);
 
     if (server_socket < 0)
     {
@@ -263,7 +374,8 @@ int main(void)
            0,
            sizeof(server_address));
 
-    server_address.sin_family = AF_INET;
+    server_address.sin_family =
+        AF_INET;
 
     server_address.sin_addr.s_addr =
         INADDR_ANY;
@@ -273,8 +385,7 @@ int main(void)
 
 
     /*
-     * Bind the Agent to personalised
-     * TCP port 9410.
+     * Bind to port 9410.
      */
     if (bind(server_socket,
              (struct sockaddr *)&server_address,
@@ -289,7 +400,7 @@ int main(void)
 
 
     /*
-     * Start listening for Controllers.
+     * Listen for Controller connections.
      */
     if (listen(server_socket,
                BACKLOG) < 0)
@@ -307,10 +418,7 @@ int main(void)
 
 
     /*
-     * Accept one Controller.
-     *
-     * Multiple simultaneous Controllers
-     * will be added in the concurrency step.
+     * Accept one Controller for now.
      */
     client_address_length =
         sizeof(client_address);
@@ -335,7 +443,7 @@ int main(void)
 
 
     /*
-     * Process newline-terminated commands.
+     * Read and process commands.
      */
     while (1)
     {
@@ -398,8 +506,7 @@ int main(void)
 
 
             /*
-             * No other command is accepted
-             * before authentication.
+             * Reject commands before AUTH.
              */
             if (!authenticated)
             {
@@ -416,8 +523,43 @@ int main(void)
 
 
             /*
+             * SYSINFO command
+             */
+            if (strcmp(line,
+                       "SYSINFO") == 0)
+            {
+                char sysinfo_message[LINE_SIZE];
+
+                if (get_sysinfo(
+                        sysinfo_message,
+                        sizeof(sysinfo_message)) < 0)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 007 SYSINFO_FAILED") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+                }
+                else
+                {
+                    if (send_response(
+                            client_socket,
+                            sysinfo_message) < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+
+            /*
              * Other authenticated commands
-             * will be implemented in later steps.
+             * will be implemented later.
              */
             if (send_response(
                     client_socket,
