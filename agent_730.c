@@ -39,7 +39,7 @@ typedef struct
 
 
 /*
- * Read one complete newline-terminated TCP line.
+ * Read one newline-terminated TCP line.
  */
 int recv_line(int socket_fd,
               LineReader *reader,
@@ -157,8 +157,8 @@ int send_all(int socket_fd,
 
 
 /*
- * Send one RemoteOps TCP response.
- * Automatically adds SID and newline.
+ * Send RemoteOps response.
+ * SID and newline are added automatically.
  */
 int send_response(int socket_fd,
                   const char *message)
@@ -297,7 +297,7 @@ int get_sysinfo(char *message,
 
 
 /*
- * Get a snapshot of running processes.
+ * Get running process snapshot.
  */
 int get_process_list(char *message,
                      size_t message_size)
@@ -388,7 +388,7 @@ int get_process_list(char *message,
 
 
 /*
- * Execute only the fixed assignment whitelist.
+ * Restricted EXEC whitelist.
  */
 int execute_whitelisted_command(const char *name,
                                 char *message,
@@ -400,6 +400,7 @@ int execute_whitelisted_command(const char *name,
 
     char output[512];
     size_t used = 0;
+
 
     if (strcmp(name, "DATE") == 0)
     {
@@ -426,12 +427,14 @@ int execute_whitelisted_command(const char *name,
         return 1;
     }
 
+
     pipe = popen(shell_command, "r");
 
     if (pipe == NULL)
     {
         return -1;
     }
+
 
     output[0] = '\0';
 
@@ -449,6 +452,10 @@ int execute_whitelisted_command(const char *name,
 
     pclose(pipe);
 
+
+    /*
+     * Keep protocol response on one line.
+     */
     for (size_t i = 0;
          output[i] != '\0';
          i++)
@@ -459,6 +466,7 @@ int execute_whitelisted_command(const char *name,
             output[i] = ' ';
         }
     }
+
 
     int length =
         snprintf(message,
@@ -486,6 +494,10 @@ int receive_file_bytes(int socket_fd,
 {
     long long total_received = 0;
 
+
+    /*
+     * Use bytes already stored by recv_line().
+     */
     if (reader->used > 0 &&
         file_size > 0)
     {
@@ -499,6 +511,7 @@ int receive_file_bytes(int socket_fd,
                 (size_t)file_size;
         }
 
+
         if (fwrite(reader->data,
                    1,
                    bytes_to_use,
@@ -507,15 +520,19 @@ int receive_file_bytes(int socket_fd,
             return -1;
         }
 
+
         total_received +=
             (long long)bytes_to_use;
+
 
         memmove(reader->data,
                 reader->data + bytes_to_use,
                 reader->used - bytes_to_use);
 
-        reader->used -= bytes_to_use;
+        reader->used -=
+            bytes_to_use;
     }
+
 
     while (total_received < file_size)
     {
@@ -534,11 +551,13 @@ int receive_file_bytes(int socket_fd,
                 (size_t)remaining;
         }
 
+
         ssize_t bytes_received =
             recv(socket_fd,
                  buffer,
                  wanted,
                  0);
+
 
         if (bytes_received > 0)
         {
@@ -557,10 +576,12 @@ int receive_file_bytes(int socket_fd,
             continue;
         }
 
+
         if (bytes_received == 0)
         {
             return -1;
         }
+
 
         if (errno == EINTR)
         {
@@ -569,6 +590,7 @@ int receive_file_bytes(int socket_fd,
 
         return -1;
     }
+
 
     return 0;
 }
@@ -582,6 +604,7 @@ int send_file_bytes(int socket_fd,
                     long long file_size)
 {
     long long total_sent = 0;
+
 
     while (total_sent < file_size)
     {
@@ -600,6 +623,7 @@ int send_file_bytes(int socket_fd,
                 (size_t)remaining;
         }
 
+
         size_t bytes_read =
             fread(buffer,
                   1,
@@ -611,6 +635,7 @@ int send_file_bytes(int socket_fd,
             return -1;
         }
 
+
         if (send_all(socket_fd,
                      buffer,
                      bytes_read) < 0)
@@ -618,9 +643,11 @@ int send_file_bytes(int socket_fd,
             return -1;
         }
 
+
         total_sent +=
             (long long)bytes_read;
     }
+
 
     return 0;
 }
@@ -637,6 +664,7 @@ void *monitor_thread(void *arg)
     MonitorSession *monitor =
         (MonitorSession *)arg;
 
+
     int udp_socket =
         socket(AF_INET,
                SOCK_DGRAM,
@@ -645,7 +673,9 @@ void *monitor_thread(void *arg)
     if (udp_socket < 0)
     {
         perror("UDP socket");
+
         monitor->active = 0;
+
         return NULL;
     }
 
@@ -682,19 +712,21 @@ void *monitor_thread(void *arg)
         char sysinfo_message[RESPONSE_SIZE];
         char udp_message[RESPONSE_SIZE];
 
+
         if (get_sysinfo(
                 sysinfo_message,
                 sizeof(sysinfo_message)) == 0)
         {
             /*
-             * get_sysinfo() creates:
+             * get_sysinfo returns:
              * OK SYSINFO ...
              *
-             * UDP needs:
+             * UDP should contain:
              * SYSINFO ... SID:0371
              */
             const char *stats =
                 sysinfo_message;
+
 
             if (strncmp(stats,
                         "OK ",
@@ -705,11 +737,13 @@ void *monitor_thread(void *arg)
 
 
             int length =
-                snprintf(udp_message,
-                         sizeof(udp_message),
-                         "%s SID:%s",
-                         stats,
-                         SESSION_ID);
+                snprintf(
+                    udp_message,
+                    sizeof(udp_message),
+                    "%s SID:%s",
+                    stats,
+                    SESSION_ID);
+
 
             if (length > 0 &&
                 (size_t)length <
@@ -724,6 +758,7 @@ void *monitor_thread(void *arg)
                     sizeof(destination));
             }
         }
+
 
         sleep(MONITOR_INTERVAL);
     }
@@ -752,6 +787,9 @@ int main(void)
     int authenticated = 0;
 
 
+    /*
+     * Create TCP socket.
+     */
     server_socket =
         socket(AF_INET,
                SOCK_STREAM,
@@ -778,6 +816,9 @@ int main(void)
         htons(AGENT_PORT);
 
 
+    /*
+     * Bind to personalised port.
+     */
     if (bind(server_socket,
              (struct sockaddr *)&server_address,
              sizeof(server_address)) < 0)
@@ -790,6 +831,9 @@ int main(void)
     }
 
 
+    /*
+     * Listen for connections.
+     */
     if (listen(server_socket,
                BACKLOG) < 0)
     {
@@ -801,17 +845,24 @@ int main(void)
     }
 
 
-    printf("RemoteOps Agent listening on TCP port %d\n",
-           AGENT_PORT);
+    printf(
+        "RemoteOps Agent listening on TCP port %d\n",
+        AGENT_PORT);
 
 
+    /*
+     * Accept one Controller for now.
+     * Concurrency is added later.
+     */
     client_address_length =
         sizeof(client_address);
 
     client_socket =
-        accept(server_socket,
-               (struct sockaddr *)&client_address,
-               &client_address_length);
+        accept(
+            server_socket,
+            (struct sockaddr *)&client_address,
+            &client_address_length);
+
 
     if (client_socket < 0)
     {
@@ -823,12 +874,13 @@ int main(void)
     }
 
 
-    printf("Controller connected from %s\n",
-           inet_ntoa(client_address.sin_addr));
+    printf(
+        "Controller connected from %s\n",
+        inet_ntoa(client_address.sin_addr));
 
 
     /*
-     * Monitoring information for this session.
+     * Monitoring state for this session.
      */
     MonitorSession monitor;
 
@@ -836,10 +888,12 @@ int main(void)
            0,
            sizeof(monitor));
 
-    if (inet_ntop(AF_INET,
-                  &client_address.sin_addr,
-                  monitor.controller_ip,
-                  sizeof(monitor.controller_ip)) == NULL)
+
+    if (inet_ntop(
+            AF_INET,
+            &client_address.sin_addr,
+            monitor.controller_ip,
+            sizeof(monitor.controller_ip)) == NULL)
     {
         perror("inet_ntop");
 
@@ -850,31 +904,41 @@ int main(void)
     }
 
 
+    /*
+     * Process commands.
+     */
     while (1)
     {
         int result =
-            recv_line(client_socket,
-                      &reader,
-                      line,
-                      sizeof(line));
+            recv_line(
+                client_socket,
+                &reader,
+                line,
+                sizeof(line));
 
 
         if (result == 1)
         {
-            printf("Received line: [%s]\n",
-                   line);
+            printf(
+                "Received line: [%s]\n",
+                line);
 
 
-            /* AUTH */
-            if (strncmp(line,
-                        "AUTH ",
-                        5) == 0)
+            /*
+             * AUTH
+             */
+            if (strncmp(
+                    line,
+                    "AUTH ",
+                    5) == 0)
             {
                 const char *token =
                     line + 5;
 
-                if (strcmp(token,
-                           AUTH_TOKEN) == 0)
+
+                if (strcmp(
+                        token,
+                        AUTH_TOKEN) == 0)
                 {
                     if (send_response(
                             client_socket,
@@ -903,11 +967,14 @@ int main(void)
                         "Controller authentication failed\n");
                 }
 
+
                 continue;
             }
 
 
-            /* Require AUTH first */
+            /*
+             * All other commands require AUTH.
+             */
             if (!authenticated)
             {
                 if (send_response(
@@ -922,11 +989,15 @@ int main(void)
             }
 
 
-            /* SYSINFO */
-            if (strcmp(line,
-                       "SYSINFO") == 0)
+            /*
+             * SYSINFO
+             */
+            if (strcmp(
+                    line,
+                    "SYSINFO") == 0)
             {
                 char message[RESPONSE_SIZE];
+
 
                 if (get_sysinfo(
                         message,
@@ -951,15 +1022,20 @@ int main(void)
                     }
                 }
 
+
                 continue;
             }
 
 
-            /* LISTPROC */
-            if (strcmp(line,
-                       "LISTPROC") == 0)
+            /*
+             * LISTPROC
+             */
+            if (strcmp(
+                    line,
+                    "LISTPROC") == 0)
             {
                 char message[RESPONSE_SIZE];
+
 
                 if (get_process_list(
                         message,
@@ -984,25 +1060,31 @@ int main(void)
                     }
                 }
 
+
                 continue;
             }
 
 
-            /* EXEC */
-            if (strncmp(line,
-                        "EXEC ",
-                        5) == 0)
+            /*
+             * EXEC
+             */
+            if (strncmp(
+                    line,
+                    "EXEC ",
+                    5) == 0)
             {
                 const char *command_name =
                     line + 5;
 
                 char message[RESPONSE_SIZE];
 
+
                 int exec_result =
                     execute_whitelisted_command(
                         command_name,
                         message,
                         sizeof(message));
+
 
                 if (exec_result == 1)
                 {
@@ -1035,22 +1117,28 @@ int main(void)
                     }
                 }
 
+
                 continue;
             }
 
 
-            /* PUT */
-            if (strncmp(line,
-                        "PUT ",
-                        4) == 0)
+            /*
+             * PUT
+             */
+            if (strncmp(
+                    line,
+                    "PUT ",
+                    4) == 0)
             {
                 char filename[256];
                 long long file_size;
 
-                if (sscanf(line,
-                           "PUT %255s %lld",
-                           filename,
-                           &file_size) != 2)
+
+                if (sscanf(
+                        line,
+                        "PUT %255s %lld",
+                        filename,
+                        &file_size) != 2)
                 {
                     if (send_response(
                             client_socket,
@@ -1064,10 +1152,12 @@ int main(void)
                 }
 
 
-                if (strchr(filename,
-                           '/') != NULL ||
-                    strstr(filename,
-                           "..") != NULL)
+                if (strchr(
+                        filename,
+                        '/') != NULL ||
+                    strstr(
+                        filename,
+                        "..") != NULL)
                 {
                     if (send_response(
                             client_socket,
@@ -1082,7 +1172,8 @@ int main(void)
 
 
                 if (file_size < 0 ||
-                    file_size > MAX_FILE_SIZE)
+                    file_size >
+                        MAX_FILE_SIZE)
                 {
                     if (send_response(
                             client_socket,
@@ -1098,11 +1189,13 @@ int main(void)
                 char file_path[512];
 
                 int path_length =
-                    snprintf(file_path,
-                             sizeof(file_path),
-                             "%s%s",
-                             STORAGE_PATH,
-                             filename);
+                    snprintf(
+                        file_path,
+                        sizeof(file_path),
+                        "%s%s",
+                        STORAGE_PATH,
+                        filename);
+
 
                 if (path_length < 0 ||
                     (size_t)path_length >=
@@ -1121,8 +1214,10 @@ int main(void)
 
 
                 FILE *upload_file =
-                    fopen(file_path,
-                          "wb");
+                    fopen(
+                        file_path,
+                        "wb");
+
 
                 if (upload_file == NULL)
                 {
@@ -1168,6 +1263,7 @@ int main(void)
                         "OK FILE_RECEIVED %s",
                         filename);
 
+
                 if (response_length < 0 ||
                     (size_t)response_length >=
                         sizeof(response))
@@ -1190,20 +1286,26 @@ int main(void)
                     filename,
                     file_size);
 
+
                 continue;
             }
 
 
-            /* GET */
-            if (strncmp(line,
-                        "GET ",
-                        4) == 0)
+            /*
+             * GET
+             */
+            if (strncmp(
+                    line,
+                    "GET ",
+                    4) == 0)
             {
                 char filename[256];
 
-                if (sscanf(line,
-                           "GET %255s",
-                           filename) != 1)
+
+                if (sscanf(
+                        line,
+                        "GET %255s",
+                        filename) != 1)
                 {
                     if (send_response(
                             client_socket,
@@ -1217,10 +1319,12 @@ int main(void)
                 }
 
 
-                if (strchr(filename,
-                           '/') != NULL ||
-                    strstr(filename,
-                           "..") != NULL)
+                if (strchr(
+                        filename,
+                        '/') != NULL ||
+                    strstr(
+                        filename,
+                        "..") != NULL)
                 {
                     if (send_response(
                             client_socket,
@@ -1237,11 +1341,13 @@ int main(void)
                 char file_path[512];
 
                 int path_length =
-                    snprintf(file_path,
-                             sizeof(file_path),
-                             "%s%s",
-                             STORAGE_PATH,
-                             filename);
+                    snprintf(
+                        file_path,
+                        sizeof(file_path),
+                        "%s%s",
+                        STORAGE_PATH,
+                        filename);
+
 
                 if (path_length < 0 ||
                     (size_t)path_length >=
@@ -1260,8 +1366,10 @@ int main(void)
 
 
                 FILE *download_file =
-                    fopen(file_path,
-                          "rb");
+                    fopen(
+                        file_path,
+                        "rb");
+
 
                 if (download_file == NULL)
                 {
@@ -1277,9 +1385,10 @@ int main(void)
                 }
 
 
-                if (fseek(download_file,
-                          0,
-                          SEEK_END) != 0)
+                if (fseek(
+                        download_file,
+                        0,
+                        SEEK_END) != 0)
                 {
                     fclose(download_file);
                     continue;
@@ -1288,6 +1397,7 @@ int main(void)
 
                 long file_size =
                     ftell(download_file);
+
 
                 if (file_size < 0)
                 {
@@ -1309,6 +1419,7 @@ int main(void)
                         filename,
                         file_size,
                         SESSION_ID);
+
 
                 if (response_length < 0 ||
                     (size_t)response_length >=
@@ -1354,6 +1465,7 @@ int main(void)
                     filename,
                     file_size);
 
+
                 continue;
             }
 
@@ -1361,15 +1473,18 @@ int main(void)
             /*
              * MONITOR START <udp_port>
              */
-            if (strncmp(line,
-                        "MONITOR START ",
-                        14) == 0)
+            if (strncmp(
+                    line,
+                    "MONITOR START ",
+                    14) == 0)
             {
                 int udp_port;
 
-                if (sscanf(line,
-                           "MONITOR START %d",
-                           &udp_port) != 1 ||
+
+                if (sscanf(
+                        line,
+                        "MONITOR START %d",
+                        &udp_port) != 1 ||
                     udp_port < 1 ||
                     udp_port > 65535)
                 {
@@ -1390,7 +1505,8 @@ int main(void)
                     monitor.udp_port =
                         udp_port;
 
-                    monitor.active = 1;
+                    monitor.active =
+                        1;
 
 
                     if (pthread_create(
@@ -1399,7 +1515,9 @@ int main(void)
                             monitor_thread,
                             &monitor) != 0)
                     {
-                        monitor.active = 0;
+                        monitor.active =
+                            0;
+
 
                         if (send_response(
                                 client_socket,
@@ -1428,11 +1546,50 @@ int main(void)
                     monitor.controller_ip,
                     monitor.udp_port);
 
+
                 continue;
             }
 
 
-            /* Unknown authenticated command */
+            /*
+             * MONITOR STOP
+             */
+            if (strcmp(
+                    line,
+                    "MONITOR STOP") == 0)
+            {
+                if (monitor.active)
+                {
+                    monitor.active =
+                        0;
+
+
+                    pthread_join(
+                        monitor.thread,
+                        NULL);
+
+
+                    printf(
+                        "UDP monitoring stopped\n");
+                }
+
+
+                if (send_response(
+                        client_socket,
+                        "OK MONITOR_STOPPED") < 0)
+                {
+                    perror("send");
+                    break;
+                }
+
+
+                continue;
+            }
+
+
+            /*
+             * Unknown command.
+             */
             if (send_response(
                     client_socket,
                     "ERR 006 UNKNOWN_COMMAND") < 0)
@@ -1445,14 +1602,18 @@ int main(void)
 
         else if (result == 0)
         {
-            printf("Controller disconnected\n");
+            printf(
+                "Controller disconnected\n");
+
             break;
         }
 
 
         else if (result == -2)
         {
-            printf("Received line is too long\n");
+            printf(
+                "Received line is too long\n");
+
             break;
         }
 
@@ -1469,17 +1630,21 @@ int main(void)
         else
         {
             perror("recv");
+
             break;
         }
     }
 
 
     /*
-     * Stop monitoring if TCP session ends.
+     * Stop monitoring if Controller
+     * disconnects without MONITOR STOP.
      */
     if (monitor.active)
     {
-        monitor.active = 0;
+        monitor.active =
+            0;
+
 
         pthread_join(
             monitor.thread,
