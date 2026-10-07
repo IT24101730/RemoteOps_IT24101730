@@ -221,3 +221,16 @@ I added exact byte-counted GET transfer and Controller-side file saving.
 
 Evaluation:
 I downloaded the uploaded file and verified it was byte-for-byte identical using SHA-256 and cmp.
+
+## Entry 17 — UDP Monitoring Start
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement MONITOR START over UDP."
+
+How I used it:
+I added a UDP monitoring thread that sends SYSINFO statistics every 2 seconds.
+
+Evaluation:
+I tested MONITOR START on UDP port 9500 and received repeated datagrams containing SID:0371.
