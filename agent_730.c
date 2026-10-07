@@ -15,6 +15,7 @@
 #define BACKLOG 5
 #define RECEIVE_BUFFER_SIZE 4096
 #define LINE_SIZE 2048
+#define RESPONSE_SIZE 8192
 
 
 /*
@@ -75,7 +76,8 @@ int recv_line(int socket_fd,
                 }
 
                 /*
-                 * Preserve bytes after this newline.
+                 * Preserve bytes after the newline.
+                 * They may contain another command.
                  */
                 memmove(reader->data,
                         reader->data + i + 1,
@@ -130,8 +132,8 @@ int recv_line(int socket_fd,
 /*
  * send_all()
  *
- * Sends all bytes even if send()
- * sends only part of the buffer.
+ * Sends all bytes even when one send()
+ * call sends only part of the buffer.
  */
 int send_all(int socket_fd,
              const char *buffer,
@@ -169,13 +171,13 @@ int send_all(int socket_fd,
 /*
  * send_response()
  *
- * Sends one RemoteOps response line.
- * Adds SID:0371 and '\n' automatically.
+ * Sends one RemoteOps response.
+ * Automatically adds SID:0371 and '\n'.
  */
 int send_response(int socket_fd,
                   const char *message)
 {
-    char response[LINE_SIZE];
+    char response[RESPONSE_SIZE];
 
     int length =
         snprintf(response,
@@ -220,7 +222,7 @@ int get_sysinfo(char *message,
 
 
     /*
-     * Read 1-minute load average.
+     * Read one-minute load average.
      */
     file = fopen("/proc/loadavg", "r");
 
@@ -292,7 +294,7 @@ int get_sysinfo(char *message,
 
 
     /*
-     * Read uptime.
+     * Read system uptime.
      */
     file = fopen("/proc/uptime", "r");
 
@@ -314,8 +316,7 @@ int get_sysinfo(char *message,
 
     /*
      * Build SYSINFO message.
-     *
-     * send_response() will add SID:0371.
+     * send_response() adds SID:0371.
      */
     int length =
         snprintf(message,
@@ -335,6 +336,125 @@ int get_sysinfo(char *message,
 }
 
 
+/*
+ * get_process_list()
+ *
+ * Gets a snapshot of running processes.
+ * Each process is stored as:
+ *
+ * PID/process_name
+ */
+int get_process_list(char *message,
+                     size_t message_size)
+{
+    FILE *pipe;
+
+    char process_line[256];
+    char process_entry[256];
+
+    int pid;
+    char process_name[128];
+
+    size_t used;
+
+    int length =
+        snprintf(message,
+                 message_size,
+                 "OK PROCS ");
+
+    if (length < 0 ||
+        (size_t)length >= message_size)
+    {
+        return -1;
+    }
+
+    used = (size_t)length;
+
+
+    /*
+     * Get PID and process command name.
+     */
+    pipe = popen("ps -eo pid=,comm=", "r");
+
+    if (pipe == NULL)
+    {
+        return -1;
+    }
+
+
+    while (fgets(process_line,
+                 sizeof(process_line),
+                 pipe) != NULL)
+    {
+        if (sscanf(process_line,
+                   "%d %127s",
+                   &pid,
+                   process_name) != 2)
+        {
+            continue;
+        }
+
+
+        /*
+         * Add comma between process entries.
+         */
+        if (used > strlen("OK PROCS "))
+        {
+            if (used + 1 >= message_size)
+            {
+                break;
+            }
+
+            message[used] = ',';
+            used++;
+
+            message[used] = '\0';
+        }
+
+
+        /*
+         * Create PID/process_name entry.
+         */
+        length =
+            snprintf(process_entry,
+                     sizeof(process_entry),
+                     "%d/%s",
+                     pid,
+                     process_name);
+
+        if (length < 0)
+        {
+            pclose(pipe);
+            return -1;
+        }
+
+
+        /*
+         * Stop if the response buffer
+         * does not have enough room.
+         */
+        if (used + (size_t)length >= message_size)
+        {
+            break;
+        }
+
+
+        memcpy(message + used,
+               process_entry,
+               (size_t)length);
+
+        used += (size_t)length;
+
+        message[used] = '\0';
+    }
+
+
+    pclose(pipe);
+
+    return 0;
+}
+
+
 int main(void)
 {
     int server_socket;
@@ -349,11 +469,15 @@ int main(void)
 
     char line[LINE_SIZE];
 
+    /*
+     * Each Controller connection begins
+     * unauthenticated.
+     */
     int authenticated = 0;
 
 
     /*
-     * Create TCP socket.
+     * Create IPv4 TCP socket.
      */
     server_socket =
         socket(AF_INET,
@@ -385,7 +509,7 @@ int main(void)
 
 
     /*
-     * Bind to port 9410.
+     * Bind to personalised port 9410.
      */
     if (bind(server_socket,
              (struct sockaddr *)&server_address,
@@ -400,7 +524,7 @@ int main(void)
 
 
     /*
-     * Listen for Controller connections.
+     * Start listening.
      */
     if (listen(server_socket,
                BACKLOG) < 0)
@@ -419,6 +543,7 @@ int main(void)
 
     /*
      * Accept one Controller for now.
+     * Concurrency will be added later.
      */
     client_address_length =
         sizeof(client_address);
@@ -443,7 +568,7 @@ int main(void)
 
 
     /*
-     * Read and process commands.
+     * Process Controller commands.
      */
     while (1)
     {
@@ -506,7 +631,8 @@ int main(void)
 
 
             /*
-             * Reject commands before AUTH.
+             * Reject every other command
+             * before successful AUTH.
              */
             if (!authenticated)
             {
@@ -528,7 +654,7 @@ int main(void)
             if (strcmp(line,
                        "SYSINFO") == 0)
             {
-                char sysinfo_message[LINE_SIZE];
+                char sysinfo_message[RESPONSE_SIZE];
 
                 if (get_sysinfo(
                         sysinfo_message,
@@ -547,6 +673,41 @@ int main(void)
                     if (send_response(
                             client_socket,
                             sysinfo_message) < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+
+            /*
+             * LISTPROC command
+             */
+            if (strcmp(line,
+                       "LISTPROC") == 0)
+            {
+                char process_message[RESPONSE_SIZE];
+
+                if (get_process_list(
+                        process_message,
+                        sizeof(process_message)) < 0)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 008 LISTPROC_FAILED") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+                }
+                else
+                {
+                    if (send_response(
+                            client_socket,
+                            process_message) < 0)
                     {
                         perror("send");
                         break;
