@@ -169,3 +169,16 @@ I used Linux /proc files to return CPU load, memory usage and uptime.
 
 Evaluation:
 I tested SYSINFO after AUTH and before AUTH.
+
+## Entry 13 — LISTPROC
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement the LISTPROC command."
+
+How I used it:
+I used ps through popen() to return a snapshot of running processes.
+
+Evaluation:
+I tested LISTPROC after authentication and before authentication.
