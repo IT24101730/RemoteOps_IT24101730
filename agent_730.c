@@ -17,11 +17,6 @@
 #define LINE_SIZE 2048
 #define RESPONSE_SIZE 8192
 
-
-/*
- * Stores TCP bytes that have been received
- * but have not yet formed a complete line.
- */
 typedef struct
 {
     char data[RECEIVE_BUFFER_SIZE];
@@ -33,13 +28,6 @@ typedef struct
  * recv_line()
  *
  * Reads one newline-terminated line from TCP.
- *
- * Return values:
- *  1  = complete line received
- *  0  = client disconnected normally
- * -1  = recv() error
- * -2  = line too long
- * -3  = disconnected with incomplete line
  */
 int recv_line(int socket_fd,
               LineReader *reader,
@@ -50,7 +38,6 @@ int recv_line(int socket_fd,
     {
         size_t i;
 
-        /* Search existing buffered data for '\n' */
         for (i = 0; i < reader->used; i++)
         {
             if (reader->data[i] == '\n')
@@ -68,17 +55,12 @@ int recv_line(int socket_fd,
 
                 line[line_length] = '\0';
 
-                /* Remove optional '\r' */
                 if (line_length > 0 &&
                     line[line_length - 1] == '\r')
                 {
                     line[line_length - 1] = '\0';
                 }
 
-                /*
-                 * Preserve bytes after the newline.
-                 * They may contain another command.
-                 */
                 memmove(reader->data,
                         reader->data + i + 1,
                         reader->used - (i + 1));
@@ -94,9 +76,6 @@ int recv_line(int socket_fd,
             return -2;
         }
 
-        /*
-         * Receive more TCP bytes.
-         */
         ssize_t bytes_received =
             recv(socket_fd,
                  reader->data + reader->used,
@@ -132,8 +111,7 @@ int recv_line(int socket_fd,
 /*
  * send_all()
  *
- * Sends all bytes even when one send()
- * call sends only part of the buffer.
+ * Sends all bytes in a buffer.
  */
 int send_all(int socket_fd,
              const char *buffer,
@@ -171,8 +149,7 @@ int send_all(int socket_fd,
 /*
  * send_response()
  *
- * Sends one RemoteOps response.
- * Automatically adds SID:0371 and '\n'.
+ * Adds SID:0371 and newline automatically.
  */
 int send_response(int socket_fd,
                   const char *message)
@@ -201,8 +178,7 @@ int send_response(int socket_fd,
 /*
  * get_sysinfo()
  *
- * Reads CPU load, used memory and uptime
- * from Linux /proc files.
+ * Reads CPU load, used memory and uptime.
  */
 int get_sysinfo(char *message,
                 size_t message_size)
@@ -220,10 +196,6 @@ int get_sysinfo(char *message,
     long value;
     char unit[32];
 
-
-    /*
-     * Read one-minute load average.
-     */
     file = fopen("/proc/loadavg", "r");
 
     if (file == NULL)
@@ -231,9 +203,7 @@ int get_sysinfo(char *message,
         return -1;
     }
 
-    if (fscanf(file,
-               "%lf",
-               &cpu_load) != 1)
+    if (fscanf(file, "%lf", &cpu_load) != 1)
     {
         fclose(file);
         return -1;
@@ -241,10 +211,6 @@ int get_sysinfo(char *message,
 
     fclose(file);
 
-
-    /*
-     * Read memory information.
-     */
     file = fopen("/proc/meminfo", "r");
 
     if (file == NULL)
@@ -258,13 +224,11 @@ int get_sysinfo(char *message,
                   &value,
                   unit) == 3)
     {
-        if (strcmp(label,
-                   "MemTotal:") == 0)
+        if (strcmp(label, "MemTotal:") == 0)
         {
             mem_total_kb = value;
         }
-        else if (strcmp(label,
-                        "MemAvailable:") == 0)
+        else if (strcmp(label, "MemAvailable:") == 0)
         {
             mem_available_kb = value;
         }
@@ -284,18 +248,9 @@ int get_sysinfo(char *message,
         return -1;
     }
 
-    /*
-     * Used memory = total - available.
-     * Convert KB to MB.
-     */
     mem_used_mb =
-        (mem_total_kb -
-         mem_available_kb) / 1024;
+        (mem_total_kb - mem_available_kb) / 1024;
 
-
-    /*
-     * Read system uptime.
-     */
     file = fopen("/proc/uptime", "r");
 
     if (file == NULL)
@@ -303,9 +258,7 @@ int get_sysinfo(char *message,
         return -1;
     }
 
-    if (fscanf(file,
-               "%lf",
-               &uptime) != 1)
+    if (fscanf(file, "%lf", &uptime) != 1)
     {
         fclose(file);
         return -1;
@@ -313,11 +266,6 @@ int get_sysinfo(char *message,
 
     fclose(file);
 
-
-    /*
-     * Build SYSINFO message.
-     * send_response() adds SID:0371.
-     */
     int length =
         snprintf(message,
                  message_size,
@@ -340,9 +288,6 @@ int get_sysinfo(char *message,
  * get_process_list()
  *
  * Gets a snapshot of running processes.
- * Each process is stored as:
- *
- * PID/process_name
  */
 int get_process_list(char *message,
                      size_t message_size)
@@ -370,17 +315,12 @@ int get_process_list(char *message,
 
     used = (size_t)length;
 
-
-    /*
-     * Get PID and process command name.
-     */
     pipe = popen("ps -eo pid=,comm=", "r");
 
     if (pipe == NULL)
     {
         return -1;
     }
-
 
     while (fgets(process_line,
                  sizeof(process_line),
@@ -394,10 +334,6 @@ int get_process_list(char *message,
             continue;
         }
 
-
-        /*
-         * Add comma between process entries.
-         */
         if (used > strlen("OK PROCS "))
         {
             if (used + 1 >= message_size)
@@ -407,14 +343,9 @@ int get_process_list(char *message,
 
             message[used] = ',';
             used++;
-
             message[used] = '\0';
         }
 
-
-        /*
-         * Create PID/process_name entry.
-         */
         length =
             snprintf(process_entry,
                      sizeof(process_entry),
@@ -428,28 +359,121 @@ int get_process_list(char *message,
             return -1;
         }
 
-
-        /*
-         * Stop if the response buffer
-         * does not have enough room.
-         */
         if (used + (size_t)length >= message_size)
         {
             break;
         }
-
 
         memcpy(message + used,
                process_entry,
                (size_t)length);
 
         used += (size_t)length;
-
         message[used] = '\0';
     }
 
+    pclose(pipe);
+
+    return 0;
+}
+
+
+/*
+ * execute_whitelisted_command()
+ *
+ * Runs only the five commands allowed
+ * by the assignment.
+ *
+ * Return:
+ *  0 = success
+ *  1 = command not allowed
+ * -1 = execution error
+ */
+int execute_whitelisted_command(const char *name,
+                                char *message,
+                                size_t message_size)
+{
+    const char *shell_command = NULL;
+
+    FILE *pipe;
+
+    char output[512];
+    size_t used = 0;
+
+    if (strcmp(name, "DATE") == 0)
+    {
+        shell_command = "date";
+    }
+    else if (strcmp(name, "UPTIME") == 0)
+    {
+        shell_command = "uptime";
+    }
+    else if (strcmp(name, "DISKFREE") == 0)
+    {
+        shell_command = "df -h /";
+    }
+    else if (strcmp(name, "HOSTNAME") == 0)
+    {
+        shell_command = "hostname";
+    }
+    else if (strcmp(name, "WHOAMI") == 0)
+    {
+        shell_command = "whoami";
+    }
+    else
+    {
+        return 1;
+    }
+
+    pipe = popen(shell_command, "r");
+
+    if (pipe == NULL)
+    {
+        return -1;
+    }
+
+    output[0] = '\0';
+
+    while (fgets(output + used,
+                 sizeof(output) - used,
+                 pipe) != NULL)
+    {
+        used = strlen(output);
+
+        if (used >= sizeof(output) - 1)
+        {
+            break;
+        }
+    }
 
     pclose(pipe);
+
+    /*
+     * The protocol requires one response line.
+     * Replace command output newlines with spaces.
+     */
+    for (size_t i = 0;
+         output[i] != '\0';
+         i++)
+    {
+        if (output[i] == '\n' ||
+            output[i] == '\r')
+        {
+            output[i] = ' ';
+        }
+    }
+
+    int length =
+        snprintf(message,
+                 message_size,
+                 "OK EXEC_RESULT %s",
+                 output);
+
+    if (length < 0 ||
+        (size_t)length >= message_size)
+    {
+        return -1;
+    }
 
     return 0;
 }
@@ -469,15 +493,11 @@ int main(void)
 
     char line[LINE_SIZE];
 
-    /*
-     * Each Controller connection begins
-     * unauthenticated.
-     */
     int authenticated = 0;
 
 
     /*
-     * Create IPv4 TCP socket.
+     * Create TCP socket.
      */
     server_socket =
         socket(AF_INET,
@@ -543,7 +563,6 @@ int main(void)
 
     /*
      * Accept one Controller for now.
-     * Concurrency will be added later.
      */
     client_address_length =
         sizeof(client_address);
@@ -568,7 +587,7 @@ int main(void)
 
 
     /*
-     * Process Controller commands.
+     * Process commands.
      */
     while (1)
     {
@@ -586,7 +605,7 @@ int main(void)
 
 
             /*
-             * AUTH command
+             * AUTH
              */
             if (strncmp(line,
                         "AUTH ",
@@ -594,7 +613,6 @@ int main(void)
             {
                 const char *token =
                     line + 5;
-
 
                 if (strcmp(token,
                            AUTH_TOKEN) == 0)
@@ -632,7 +650,7 @@ int main(void)
 
             /*
              * Reject every other command
-             * before successful AUTH.
+             * before authentication.
              */
             if (!authenticated)
             {
@@ -649,10 +667,9 @@ int main(void)
 
 
             /*
-             * SYSINFO command
+             * SYSINFO
              */
-            if (strcmp(line,
-                       "SYSINFO") == 0)
+            if (strcmp(line, "SYSINFO") == 0)
             {
                 char sysinfo_message[RESPONSE_SIZE];
 
@@ -684,10 +701,9 @@ int main(void)
 
 
             /*
-             * LISTPROC command
+             * LISTPROC
              */
-            if (strcmp(line,
-                       "LISTPROC") == 0)
+            if (strcmp(line, "LISTPROC") == 0)
             {
                 char process_message[RESPONSE_SIZE];
 
@@ -719,8 +735,61 @@ int main(void)
 
 
             /*
-             * Other authenticated commands
-             * will be implemented later.
+             * EXEC
+             */
+            if (strncmp(line,
+                        "EXEC ",
+                        5) == 0)
+            {
+                const char *command_name =
+                    line + 5;
+
+                char exec_message[RESPONSE_SIZE];
+
+                int exec_result =
+                    execute_whitelisted_command(
+                        command_name,
+                        exec_message,
+                        sizeof(exec_message));
+
+
+                if (exec_result == 1)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 002 COMMAND_NOT_ALLOWED") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+                }
+                else if (exec_result < 0)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 009 EXEC_FAILED") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+                }
+                else
+                {
+                    if (send_response(
+                            client_socket,
+                            exec_message) < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+
+            /*
+             * Unknown authenticated command.
              */
             if (send_response(
                     client_socket,
@@ -763,9 +832,6 @@ int main(void)
     }
 
 
-    /*
-     * Close sockets.
-     */
     close(client_socket);
     close(server_socket);
 
