@@ -286,3 +286,17 @@ I added SIGPIPE protection and SO_REUSEADDR, then tested an unexpected Controlle
 
 Evaluation:
 The Agent detected the disconnect and exited cleanly without crashing.
+
+## Entry 22 — Concurrent Controllers
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me support at least 5 simultaneous Controllers."
+
+How I used it:
+I changed the Agent to use one pthread per Controller while the main thread continues accepting new connections.
+
+Evaluation:
+I tested 5 simultaneous Controllers and each authenticated, received SYSINFO, and quit successfully.
+
