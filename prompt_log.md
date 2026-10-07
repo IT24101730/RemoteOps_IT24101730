@@ -234,3 +234,16 @@ I added a UDP monitoring thread that sends SYSINFO statistics every 2 seconds.
 
 Evaluation:
 I tested MONITOR START on UDP port 9500 and received repeated datagrams containing SID:0371.
+
+## Entry 18 — UDP Monitoring Stop
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement MONITOR STOP."
+
+How I used it:
+I added logic to stop and join the UDP monitoring thread.
+
+Evaluation:
+I confirmed UDP messages stopped after MONITOR STOP and the Agent returned OK MONITOR_STOPPED.
