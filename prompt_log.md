@@ -143,3 +143,17 @@ I used the guidance to add authentication to the Agent and include SID:0371 in t
 
 Changes / evaluation:
 I tested successful AUTH, failed AUTH, and SYSINFO before authentication.
+
+## Entry 11 — SID Response Helper
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me make SID responses consistent using a helper function."
+
+How I used the output:
+I added send_response() so Agent responses automatically include SID:0371 and a newline.
+
+Changes / evaluation:
+I re-tested successful AUTH, failed AUTH, and AUTH_REQUIRED responses.
+
