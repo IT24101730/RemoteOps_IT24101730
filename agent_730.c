@@ -17,7 +17,7 @@
 #define LOG_FILE "remoteops_IT24101730.log"
 
 /* Program settings */
-#define BACKLOG 5
+#define BACKLOG 10
 #define RECEIVE_BUFFER_SIZE 4096
 #define LINE_SIZE 2048
 #define RESPONSE_SIZE 8192
@@ -42,13 +42,23 @@ typedef struct
 
 
 /*
- * Protect log writes.
+ * Information passed to each Controller thread.
+ */
+typedef struct
+{
+    int client_socket;
+    struct sockaddr_in client_address;
+} ClientSession;
+
+
+/*
+ * Mutex protects the shared log file.
  */
 pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 /*
- * Write one timestamped event to the log file.
+ * Write one timestamped log entry.
  */
 void log_event(const char *event)
 {
@@ -85,8 +95,7 @@ void log_event(const char *event)
 
 
 /*
- * Log a command without storing
- * the authentication token.
+ * Log commands without storing the AUTH token.
  */
 void log_command(const char *command)
 {
@@ -111,7 +120,7 @@ void log_command(const char *command)
 
 
 /*
- * Read one newline-terminated TCP line.
+ * Read one complete newline-terminated TCP line.
  */
 int recv_line(int socket_fd,
               LineReader *reader,
@@ -193,7 +202,7 @@ int recv_line(int socket_fd,
 
 
 /*
- * Send all bytes in a buffer.
+ * Send all bytes.
  */
 int send_all(int socket_fd,
              const char *buffer,
@@ -229,7 +238,7 @@ int send_all(int socket_fd,
 
 
 /*
- * Send response with SID and newline.
+ * Send protocol response with SID and newline.
  */
 int send_response(int socket_fd,
                   const char *message)
@@ -256,7 +265,7 @@ int send_response(int socket_fd,
 
 
 /*
- * Get CPU load, memory usage and uptime.
+ * Build SYSINFO data.
  */
 int get_sysinfo(char *message,
                 size_t message_size)
@@ -327,8 +336,7 @@ int get_sysinfo(char *message,
     }
 
     mem_used_mb =
-        (mem_total_kb -
-         mem_available_kb) / 1024;
+        (mem_total_kb - mem_available_kb) / 1024;
 
     file = fopen("/proc/uptime", "r");
 
@@ -364,7 +372,7 @@ int get_sysinfo(char *message,
 
 
 /*
- * Get running process list.
+ * Build process list.
  */
 int get_process_list(char *message,
                      size_t message_size)
@@ -455,7 +463,7 @@ int get_process_list(char *message,
 
 
 /*
- * Restricted EXEC whitelist.
+ * Run only approved EXEC commands.
  */
 int execute_whitelisted_command(const char *name,
                                 char *message,
@@ -555,14 +563,11 @@ int receive_file_bytes(int socket_fd,
     if (reader->used > 0 &&
         file_size > 0)
     {
-        size_t bytes_to_use =
-            reader->used;
+        size_t bytes_to_use = reader->used;
 
-        if ((long long)bytes_to_use >
-            file_size)
+        if ((long long)bytes_to_use > file_size)
         {
-            bytes_to_use =
-                (size_t)file_size;
+            bytes_to_use = (size_t)file_size;
         }
 
         if (fwrite(reader->data,
@@ -573,15 +578,13 @@ int receive_file_bytes(int socket_fd,
             return -1;
         }
 
-        total_received +=
-            (long long)bytes_to_use;
+        total_received += (long long)bytes_to_use;
 
         memmove(reader->data,
                 reader->data + bytes_to_use,
                 reader->used - bytes_to_use);
 
-        reader->used -=
-            bytes_to_use;
+        reader->used -= bytes_to_use;
     }
 
     while (total_received < file_size)
@@ -591,14 +594,11 @@ int receive_file_bytes(int socket_fd,
         long long remaining =
             file_size - total_received;
 
-        size_t wanted =
-            sizeof(buffer);
+        size_t wanted = sizeof(buffer);
 
-        if (remaining <
-            (long long)wanted)
+        if (remaining < (long long)wanted)
         {
-            wanted =
-                (size_t)remaining;
+            wanted = (size_t)remaining;
         }
 
         ssize_t bytes_received =
@@ -618,8 +618,7 @@ int receive_file_bytes(int socket_fd,
                 return -1;
             }
 
-            total_received +=
-                bytes_received;
+            total_received += bytes_received;
 
             continue;
         }
@@ -657,14 +656,11 @@ int send_file_bytes(int socket_fd,
         long long remaining =
             file_size - total_sent;
 
-        size_t wanted =
-            sizeof(buffer);
+        size_t wanted = sizeof(buffer);
 
-        if (remaining <
-            (long long)wanted)
+        if (remaining < (long long)wanted)
         {
-            wanted =
-                (size_t)remaining;
+            wanted = (size_t)remaining;
         }
 
         size_t bytes_read =
@@ -685,8 +681,7 @@ int send_file_bytes(int socket_fd,
             return -1;
         }
 
-        total_sent +=
-            (long long)bytes_read;
+        total_sent += (long long)bytes_read;
     }
 
     return 0;
@@ -694,7 +689,7 @@ int send_file_bytes(int socket_fd,
 
 
 /*
- * UDP monitoring thread.
+ * UDP monitoring thread for one Controller.
  */
 void *monitor_thread(void *arg)
 {
@@ -719,8 +714,7 @@ void *monitor_thread(void *arg)
            0,
            sizeof(destination));
 
-    destination.sin_family =
-        AF_INET;
+    destination.sin_family = AF_INET;
 
     destination.sin_port =
         htons(monitor->udp_port);
@@ -787,131 +781,30 @@ void *monitor_thread(void *arg)
 }
 
 
-int main(void)
+/*
+ * Handle one Controller.
+ *
+ * Every connected Controller runs this
+ * function in a separate pthread.
+ */
+void *handle_client(void *arg)
 {
-    /*
-     * Prevent Agent termination when sending
-     * to a disconnected Controller.
-     */
-    signal(SIGPIPE, SIG_IGN);
+    ClientSession *session =
+        (ClientSession *)arg;
 
-    int server_socket;
-    int client_socket;
+    int client_socket =
+        session->client_socket;
 
-    struct sockaddr_in server_address;
-    struct sockaddr_in client_address;
+    struct sockaddr_in client_address =
+        session->client_address;
 
-    socklen_t client_address_length;
+    free(session);
 
     LineReader reader = { .used = 0 };
 
     char line[LINE_SIZE];
 
     int authenticated = 0;
-
-
-    server_socket =
-        socket(AF_INET,
-               SOCK_STREAM,
-               0);
-
-    if (server_socket < 0)
-    {
-        perror("socket");
-        return 1;
-    }
-
-
-    /*
-     * Allow quick restart on the same port.
-     */
-    int reuse_address = 1;
-
-    if (setsockopt(server_socket,
-                   SOL_SOCKET,
-                   SO_REUSEADDR,
-                   &reuse_address,
-                   sizeof(reuse_address)) < 0)
-    {
-        perror("setsockopt");
-
-        close(server_socket);
-
-        return 1;
-    }
-
-
-    memset(&server_address,
-           0,
-           sizeof(server_address));
-
-    server_address.sin_family =
-        AF_INET;
-
-    server_address.sin_addr.s_addr =
-        INADDR_ANY;
-
-    server_address.sin_port =
-        htons(AGENT_PORT);
-
-
-    if (bind(server_socket,
-             (struct sockaddr *)&server_address,
-             sizeof(server_address)) < 0)
-    {
-        perror("bind");
-        close(server_socket);
-        return 1;
-    }
-
-
-    if (listen(server_socket,
-               BACKLOG) < 0)
-    {
-        perror("listen");
-        close(server_socket);
-        return 1;
-    }
-
-
-    printf(
-        "RemoteOps Agent listening on TCP port %d\n",
-        AGENT_PORT);
-
-
-    client_address_length =
-        sizeof(client_address);
-
-    client_socket =
-        accept(
-            server_socket,
-            (struct sockaddr *)&client_address,
-            &client_address_length);
-
-    if (client_socket < 0)
-    {
-        perror("accept");
-        close(server_socket);
-        return 1;
-    }
-
-
-    printf(
-        "Controller connected from %s\n",
-        inet_ntoa(client_address.sin_addr));
-
-
-    {
-        char log_message[256];
-
-        snprintf(log_message,
-                 sizeof(log_message),
-                 "CONNECTION from %s",
-                 inet_ntoa(client_address.sin_addr));
-
-        log_event(log_message);
-    }
-
 
     MonitorSession monitor;
 
@@ -929,9 +822,25 @@ int main(void)
         perror("inet_ntop");
 
         close(client_socket);
-        close(server_socket);
 
-        return 1;
+        return NULL;
+    }
+
+
+    printf(
+        "Controller connected from %s\n",
+        monitor.controller_ip);
+
+
+    {
+        char log_message[256];
+
+        snprintf(log_message,
+                 sizeof(log_message),
+                 "CONNECTION from %s",
+                 monitor.controller_ip);
+
+        log_event(log_message);
     }
 
 
@@ -948,13 +857,16 @@ int main(void)
         if (result == 1)
         {
             printf(
-                "Received line: [%s]\n",
+                "[%s] Received line: [%s]\n",
+                monitor.controller_ip,
                 line);
 
             log_command(line);
 
 
-            /* AUTH */
+            /*
+             * AUTH
+             */
             if (strncmp(
                     line,
                     "AUTH ",
@@ -967,6 +879,8 @@ int main(void)
                         token,
                         AUTH_TOKEN) == 0)
                 {
+                    authenticated = 1;
+
                     if (send_response(
                             client_socket,
                             "OK AUTHENTICATED") < 0)
@@ -975,15 +889,16 @@ int main(void)
                         break;
                     }
 
-                    authenticated = 1;
-
                     printf(
-                        "Controller authenticated successfully\n");
+                        "[%s] Controller authenticated successfully\n",
+                        monitor.controller_ip);
 
                     log_event("AUTH SUCCESS");
                 }
                 else
                 {
+                    authenticated = 0;
+
                     if (send_response(
                             client_socket,
                             "ERR 001 AUTH_FAILED") < 0)
@@ -993,7 +908,8 @@ int main(void)
                     }
 
                     printf(
-                        "Controller authentication failed\n");
+                        "[%s] Controller authentication failed\n",
+                        monitor.controller_ip);
 
                     log_event("AUTH FAILED");
                 }
@@ -1002,7 +918,9 @@ int main(void)
             }
 
 
-            /* AUTH required before other commands */
+            /*
+             * AUTH required first.
+             */
             if (!authenticated)
             {
                 if (send_response(
@@ -1017,8 +935,12 @@ int main(void)
             }
 
 
-            /* SYSINFO */
-            if (strcmp(line, "SYSINFO") == 0)
+            /*
+             * SYSINFO
+             */
+            if (strcmp(
+                    line,
+                    "SYSINFO") == 0)
             {
                 char message[RESPONSE_SIZE];
 
@@ -1049,8 +971,12 @@ int main(void)
             }
 
 
-            /* LISTPROC */
-            if (strcmp(line, "LISTPROC") == 0)
+            /*
+             * LISTPROC
+             */
+            if (strcmp(
+                    line,
+                    "LISTPROC") == 0)
             {
                 char message[RESPONSE_SIZE];
 
@@ -1081,8 +1007,13 @@ int main(void)
             }
 
 
-            /* EXEC */
-            if (strncmp(line, "EXEC ", 5) == 0)
+            /*
+             * EXEC
+             */
+            if (strncmp(
+                    line,
+                    "EXEC ",
+                    5) == 0)
             {
                 const char *command_name =
                     line + 5;
@@ -1130,8 +1061,13 @@ int main(void)
             }
 
 
-            /* PUT */
-            if (strncmp(line, "PUT ", 4) == 0)
+            /*
+             * PUT
+             */
+            if (strncmp(
+                    line,
+                    "PUT ",
+                    4) == 0)
             {
                 char filename[256];
                 long long file_size;
@@ -1185,11 +1121,12 @@ int main(void)
 
                 char file_path[512];
 
-                snprintf(file_path,
-                         sizeof(file_path),
-                         "%s%s",
-                         STORAGE_PATH,
-                         filename);
+                snprintf(
+                    file_path,
+                    sizeof(file_path),
+                    "%s%s",
+                    STORAGE_PATH,
+                    filename);
 
 
                 FILE *upload_file =
@@ -1217,10 +1154,12 @@ int main(void)
                         file_size) < 0)
                 {
                     fclose(upload_file);
+
                     remove(file_path);
 
                     printf(
-                        "File upload failed: %s\n",
+                        "[%s] File upload failed: %s\n",
+                        monitor.controller_ip,
                         filename);
 
                     break;
@@ -1249,7 +1188,8 @@ int main(void)
 
 
                 printf(
-                    "File received: %s (%lld bytes)\n",
+                    "[%s] File received: %s (%lld bytes)\n",
+                    monitor.controller_ip,
                     filename,
                     file_size);
 
@@ -1272,8 +1212,13 @@ int main(void)
             }
 
 
-            /* GET */
-            if (strncmp(line, "GET ", 4) == 0)
+            /*
+             * GET
+             */
+            if (strncmp(
+                    line,
+                    "GET ",
+                    4) == 0)
             {
                 char filename[256];
 
@@ -1311,11 +1256,12 @@ int main(void)
 
                 char file_path[512];
 
-                snprintf(file_path,
-                         sizeof(file_path),
-                         "%s%s",
-                         STORAGE_PATH,
-                         filename);
+                snprintf(
+                    file_path,
+                    sizeof(file_path),
+                    "%s%s",
+                    STORAGE_PATH,
+                    filename);
 
 
                 FILE *download_file =
@@ -1417,7 +1363,8 @@ int main(void)
                     fclose(download_file);
 
                     printf(
-                        "File download failed: %s\n",
+                        "[%s] File download failed: %s\n",
+                        monitor.controller_ip,
                         filename);
 
                     break;
@@ -1428,7 +1375,8 @@ int main(void)
 
 
                 printf(
-                    "File sent: %s (%ld bytes)\n",
+                    "[%s] File sent: %s (%ld bytes)\n",
+                    monitor.controller_ip,
                     filename,
                     file_size);
 
@@ -1451,7 +1399,9 @@ int main(void)
             }
 
 
-            /* MONITOR START */
+            /*
+             * MONITOR START
+             */
             if (strncmp(
                     line,
                     "MONITOR START ",
@@ -1483,8 +1433,7 @@ int main(void)
                     monitor.udp_port =
                         udp_port;
 
-                    monitor.active =
-                        1;
+                    monitor.active = 1;
 
 
                     if (pthread_create(
@@ -1493,8 +1442,7 @@ int main(void)
                             monitor_thread,
                             &monitor) != 0)
                     {
-                        monitor.active =
-                            0;
+                        monitor.active = 0;
 
                         if (send_response(
                                 client_socket,
@@ -1519,7 +1467,7 @@ int main(void)
 
 
                 printf(
-                    "UDP monitoring started to %s:%d\n",
+                    "[%s] UDP monitoring started on port %d\n",
                     monitor.controller_ip,
                     monitor.udp_port);
 
@@ -1542,7 +1490,9 @@ int main(void)
             }
 
 
-            /* MONITOR STOP */
+            /*
+             * MONITOR STOP
+             */
             if (strcmp(
                     line,
                     "MONITOR STOP") == 0)
@@ -1556,7 +1506,8 @@ int main(void)
                         NULL);
 
                     printf(
-                        "UDP monitoring stopped\n");
+                        "[%s] UDP monitoring stopped\n",
+                        monitor.controller_ip);
 
                     log_event("MONITOR STOP");
                 }
@@ -1575,7 +1526,9 @@ int main(void)
             }
 
 
-            /* QUIT */
+            /*
+             * QUIT
+             */
             if (strcmp(
                     line,
                     "QUIT") == 0)
@@ -1587,9 +1540,6 @@ int main(void)
                     pthread_join(
                         monitor.thread,
                         NULL);
-
-                    printf(
-                        "UDP monitoring stopped\n");
 
                     log_event("MONITOR STOP");
                 }
@@ -1604,7 +1554,8 @@ int main(void)
 
 
                 printf(
-                    "Controller requested QUIT\n");
+                    "[%s] Controller requested QUIT\n",
+                    monitor.controller_ip);
 
                 log_event("QUIT");
 
@@ -1612,7 +1563,9 @@ int main(void)
             }
 
 
-            /* Unknown command */
+            /*
+             * Unknown command.
+             */
             if (send_response(
                     client_socket,
                     "ERR 006 UNKNOWN_COMMAND") < 0)
@@ -1626,7 +1579,8 @@ int main(void)
         else if (result == 0)
         {
             printf(
-                "Controller disconnected\n");
+                "[%s] Controller disconnected\n",
+                monitor.controller_ip);
 
             log_event("DISCONNECTION");
 
@@ -1637,7 +1591,8 @@ int main(void)
         else if (result == -2)
         {
             printf(
-                "Received line is too long\n");
+                "[%s] Received line too long\n",
+                monitor.controller_ip);
 
             log_event("ERROR line too long");
 
@@ -1648,7 +1603,8 @@ int main(void)
         else if (result == -3)
         {
             printf(
-                "Controller disconnected with incomplete line\n");
+                "[%s] Controller disconnected with incomplete line\n",
+                monitor.controller_ip);
 
             log_event(
                 "DISCONNECTION with incomplete command");
@@ -1669,8 +1625,8 @@ int main(void)
 
 
     /*
-     * Stop monitoring if Controller disconnects
-     * without MONITOR STOP or QUIT.
+     * Stop this Controller's UDP monitor
+     * if it disconnects unexpectedly.
      */
     if (monitor.active)
     {
@@ -1683,6 +1639,168 @@ int main(void)
 
 
     close(client_socket);
+
+    return NULL;
+}
+
+
+/*
+ * Main Agent.
+ *
+ * Main thread accepts Controllers.
+ * Each Controller gets its own pthread.
+ */
+int main(void)
+{
+    signal(SIGPIPE, SIG_IGN);
+
+    int server_socket;
+
+    struct sockaddr_in server_address;
+
+
+    server_socket =
+        socket(AF_INET,
+               SOCK_STREAM,
+               0);
+
+    if (server_socket < 0)
+    {
+        perror("socket");
+        return 1;
+    }
+
+
+    int reuse_address = 1;
+
+    if (setsockopt(server_socket,
+                   SOL_SOCKET,
+                   SO_REUSEADDR,
+                   &reuse_address,
+                   sizeof(reuse_address)) < 0)
+    {
+        perror("setsockopt");
+
+        close(server_socket);
+
+        return 1;
+    }
+
+
+    memset(&server_address,
+           0,
+           sizeof(server_address));
+
+    server_address.sin_family =
+        AF_INET;
+
+    server_address.sin_addr.s_addr =
+        INADDR_ANY;
+
+    server_address.sin_port =
+        htons(AGENT_PORT);
+
+
+    if (bind(server_socket,
+             (struct sockaddr *)&server_address,
+             sizeof(server_address)) < 0)
+    {
+        perror("bind");
+
+        close(server_socket);
+
+        return 1;
+    }
+
+
+    if (listen(server_socket,
+               BACKLOG) < 0)
+    {
+        perror("listen");
+
+        close(server_socket);
+
+        return 1;
+    }
+
+
+    printf(
+        "RemoteOps Agent listening on TCP port %d\n",
+        AGENT_PORT);
+
+    printf(
+        "Concurrency enabled: thread per Controller\n");
+
+
+    /*
+     * Keep accepting new Controllers.
+     */
+    while (1)
+    {
+        ClientSession *session =
+            malloc(sizeof(ClientSession));
+
+        if (session == NULL)
+        {
+            perror("malloc");
+            continue;
+        }
+
+
+        socklen_t client_length =
+            sizeof(session->client_address);
+
+
+        session->client_socket =
+            accept(
+                server_socket,
+                (struct sockaddr *)&session->client_address,
+                &client_length);
+
+
+        if (session->client_socket < 0)
+        {
+            if (errno == EINTR)
+            {
+                free(session);
+                continue;
+            }
+
+            perror("accept");
+
+            free(session);
+
+            continue;
+        }
+
+
+        pthread_t client_thread;
+
+
+        if (pthread_create(
+                &client_thread,
+                NULL,
+                handle_client,
+                session) != 0)
+        {
+            perror("pthread_create");
+
+            close(session->client_socket);
+
+            free(session);
+
+            continue;
+        }
+
+
+        /*
+         * Detached threads clean up automatically
+         * when their Controller finishes.
+         */
+        pthread_detach(client_thread);
+    }
+
+
     close(server_socket);
 
     return 0;
