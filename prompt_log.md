@@ -157,3 +157,15 @@ I added send_response() so Agent responses automatically include SID:0371 and a 
 Changes / evaluation:
 I re-tested successful AUTH, failed AUTH, and AUTH_REQUIRED responses.
 
+## Entry 12 — SYSINFO
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement the SYSINFO command."
+
+How I used it:
+I used Linux /proc files to return CPU load, memory usage and uptime.
+
+Evaluation:
+I tested SYSINFO after AUTH and before AUTH.
