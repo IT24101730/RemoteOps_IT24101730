@@ -208,3 +208,16 @@ I added exact byte-counted upload to ./agentfiles/IT24101730/.
 
 Evaluation:
 I uploaded a test file and verified the stored file was identical.
+
+## Entry 16 — GET Download
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement GET file download."
+
+How I used it:
+I added exact byte-counted GET transfer and Controller-side file saving.
+
+Evaluation:
+I downloaded the uploaded file and verified it was byte-for-byte identical using SHA-256 and cmp.
