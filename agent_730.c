@@ -179,8 +179,6 @@ int send_response(int socket_fd,
 
 /*
  * get_sysinfo()
- *
- * Reads CPU load, used memory and uptime.
  */
 int get_sysinfo(char *message,
                 size_t message_size)
@@ -288,8 +286,6 @@ int get_sysinfo(char *message,
 
 /*
  * get_process_list()
- *
- * Gets a snapshot of running processes.
  */
 int get_process_list(char *message,
                      size_t message_size)
@@ -383,7 +379,12 @@ int get_process_list(char *message,
 /*
  * execute_whitelisted_command()
  *
- * Runs only allowed EXEC commands.
+ * Only these are allowed:
+ * DATE
+ * UPTIME
+ * DISKFREE
+ * HOSTNAME
+ * WHOAMI
  */
 int execute_whitelisted_command(const char *name,
                                 char *message,
@@ -392,7 +393,6 @@ int execute_whitelisted_command(const char *name,
     const char *shell_command = NULL;
 
     FILE *pipe;
-
     char output[512];
     size_t used = 0;
 
@@ -474,7 +474,7 @@ int execute_whitelisted_command(const char *name,
 /*
  * receive_file_bytes()
  *
- * Receives exactly file_size raw bytes.
+ * Receives exactly file_size bytes for PUT.
  */
 int receive_file_bytes(int socket_fd,
                        LineReader *reader,
@@ -483,10 +483,6 @@ int receive_file_bytes(int socket_fd,
 {
     long long total_received = 0;
 
-    /*
-     * First consume any bytes already stored
-     * in the LineReader buffer.
-     */
     if (reader->used > 0 &&
         file_size > 0)
     {
@@ -519,9 +515,6 @@ int receive_file_bytes(int socket_fd,
             bytes_to_use;
     }
 
-    /*
-     * Receive remaining bytes.
-     */
     while (total_received < file_size)
     {
         char buffer[4096];
@@ -573,6 +566,60 @@ int receive_file_bytes(int socket_fd,
         }
 
         return -1;
+    }
+
+    return 0;
+}
+
+
+/*
+ * send_file_bytes()
+ *
+ * Sends exactly file_size bytes for GET.
+ */
+int send_file_bytes(int socket_fd,
+                    FILE *file,
+                    long long file_size)
+{
+    long long total_sent = 0;
+
+    while (total_sent < file_size)
+    {
+        char buffer[4096];
+
+        long long remaining =
+            file_size - total_sent;
+
+        size_t wanted =
+            sizeof(buffer);
+
+        if (remaining <
+            (long long)wanted)
+        {
+            wanted =
+                (size_t)remaining;
+        }
+
+        size_t bytes_read =
+            fread(buffer,
+                  1,
+                  wanted,
+                  file);
+
+        if (bytes_read == 0)
+        {
+            return -1;
+        }
+
+        if (send_all(socket_fd,
+                     buffer,
+                     bytes_read) < 0)
+        {
+            return -1;
+        }
+
+        total_sent +=
+            (long long)bytes_read;
     }
 
     return 0;
@@ -891,9 +938,6 @@ int main(void)
                 }
 
 
-                /*
-                 * Prevent directory traversal.
-                 */
                 if (strchr(filename,
                            '/') != NULL ||
                     strstr(filename,
@@ -911,9 +955,6 @@ int main(void)
                 }
 
 
-                /*
-                 * Validate size.
-                 */
                 if (file_size < 0 ||
                     file_size > MAX_FILE_SIZE)
                 {
@@ -1028,7 +1069,178 @@ int main(void)
 
 
             /*
-             * Unknown authenticated command.
+             * GET
+             */
+            if (strncmp(line,
+                        "GET ",
+                        4) == 0)
+            {
+                char filename[256];
+
+                if (sscanf(line,
+                           "GET %255s",
+                           filename) != 1)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 005 FILE_NOT_FOUND") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                if (strchr(filename,
+                           '/') != NULL ||
+                    strstr(filename,
+                           "..") != NULL)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 005 FILE_NOT_FOUND") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                char file_path[512];
+
+                int path_length =
+                    snprintf(file_path,
+                             sizeof(file_path),
+                             "%s%s",
+                             STORAGE_PATH,
+                             filename);
+
+                if (path_length < 0 ||
+                    (size_t)path_length >=
+                        sizeof(file_path))
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 005 FILE_NOT_FOUND") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                FILE *download_file =
+                    fopen(file_path,
+                          "rb");
+
+                if (download_file == NULL)
+                {
+                    if (send_response(
+                            client_socket,
+                            "ERR 005 FILE_NOT_FOUND") < 0)
+                    {
+                        perror("send");
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                if (fseek(download_file,
+                          0,
+                          SEEK_END) != 0)
+                {
+                    fclose(download_file);
+                    continue;
+                }
+
+
+                long file_size =
+                    ftell(download_file);
+
+                if (file_size < 0)
+                {
+                    fclose(download_file);
+                    continue;
+                }
+
+
+                rewind(download_file);
+
+
+                char get_response[512];
+
+                int response_length =
+                    snprintf(
+                        get_response,
+                        sizeof(get_response),
+                        "OK FILE_SEND %s %ld SID:%s\n",
+                        filename,
+                        file_size,
+                        SESSION_ID);
+
+                if (response_length < 0 ||
+                    (size_t)response_length >=
+                        sizeof(get_response))
+                {
+                    fclose(download_file);
+                    break;
+                }
+
+
+                /*
+                 * Send GET response line.
+                 */
+                if (send_all(
+                        client_socket,
+                        get_response,
+                        (size_t)response_length) < 0)
+                {
+                    fclose(download_file);
+                    perror("send");
+                    break;
+                }
+
+
+                /*
+                 * Immediately send raw file bytes.
+                 */
+                if (send_file_bytes(
+                        client_socket,
+                        download_file,
+                        (long long)file_size) < 0)
+                {
+                    fclose(download_file);
+
+                    printf(
+                        "File download failed: %s\n",
+                        filename);
+
+                    break;
+                }
+
+
+                fclose(download_file);
+
+
+                printf(
+                    "File sent: %s (%ld bytes)\n",
+                    filename,
+                    file_size);
+
+                continue;
+            }
+
+
+            /*
+             * Unknown command.
              */
             if (send_response(
                     client_socket,
