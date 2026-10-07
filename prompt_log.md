@@ -182,3 +182,16 @@ I used ps through popen() to return a snapshot of running processes.
 
 Evaluation:
 I tested LISTPROC after authentication and before authentication.
+
+## Entry 14 — EXEC Whitelist
+Date: 07/10/2026
+Tool: ChatGPT
+
+Prompt:
+"Help me implement the restricted EXEC whitelist."
+
+How I used it:
+I added support for DATE, UPTIME, DISKFREE, HOSTNAME and WHOAMI only.
+
+Evaluation:
+I tested EXEC DATE successfully and confirmed EXEC LS was rejected.
